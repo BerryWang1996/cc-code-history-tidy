@@ -197,7 +197,7 @@ def test_failed_cross_root_execute_rolls_back_every_root(tmp_path, monkeypatch):
         / fixture.current_group_id
         / "session-source.json"
     ).exists()
-    assert "rolled back" in window.status_label.text()
+    assert "已全部回滚" in window.status_label.text()
 
 
 def test_layout_written_to_each_involved_root(tmp_path):

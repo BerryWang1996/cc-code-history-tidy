@@ -77,10 +77,21 @@ def _candidate_sessions_roots(appdata: Path, localappdata: Path) -> list[Path]:
         for package_dir in packages.glob("Claude_*"):
             candidate_claude_roots.append(package_dir / "LocalCache" / "Roaming" / "Claude")
 
+    seen_physical: set[Path] = set()
     for root in candidate_claude_roots:
         sessions_root = root / "claude-code-sessions"
-        if sessions_root.exists():
-            roots.append(sessions_root)
+        if not sessions_root.exists():
+            continue
+        # %APPDATA%/Claude may be a directory junction into the MSIX
+        # LocalCache dir; the same physical store must only be scanned once.
+        try:
+            physical = sessions_root.resolve()
+        except OSError:
+            physical = sessions_root
+        if physical in seen_physical:
+            continue
+        seen_physical.add(physical)
+        roots.append(sessions_root)
     return roots
 
 

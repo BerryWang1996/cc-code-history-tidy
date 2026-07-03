@@ -43,6 +43,7 @@ from cc_history_tidy.session_tree import (
     STAGED_MODE_ROLE,
     SessionTreeWidget,
     _new_code_group_item,
+    format_activity_timestamp,
 )
 
 
@@ -76,9 +77,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("CC Code History Tidy")
         self.resize(1120, 720)
 
-        self.status_label = QLabel("Scan Claude Desktop Code sessions, then stage migrations.")
+        self.status_label = QLabel("点击 扫描 载入 Claude Desktop Code 会话，然后用 复制/剪切/粘贴 或拖拽整理。")
         self.session_tree = SessionTreeWidget()
-        self.session_tree.setHeaderLabels(["Account / Code group / Conversation", "Updated"])
+        self.session_tree.setHeaderLabels(["账户 / Code 分组 / 对话", "更新时间"])
+        self.session_tree.setColumnWidth(0, 620)
+        self.session_tree.header().setStretchLastSection(True)
         self.session_tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.session_tree.setDragEnabled(True)
         self.session_tree.setAcceptDrops(True)
@@ -87,10 +90,10 @@ class MainWindow(QMainWindow):
         self.session_tree.setDefaultDropAction(Qt.DropAction.MoveAction)
 
         action_row = QHBoxLayout()
-        self.scan_button = QPushButton("Scan")
-        self.dry_run_button = QPushButton("Dry-run")
-        self.execute_button = QPushButton("Execute")
-        self.backups_button = QPushButton("Backups")
+        self.scan_button = QPushButton("扫描")
+        self.dry_run_button = QPushButton("预览")
+        self.execute_button = QPushButton("执行")
+        self.backups_button = QPushButton("备份")
         action_row.addWidget(self.scan_button)
         action_row.addWidget(self.dry_run_button)
         action_row.addWidget(self.execute_button)
@@ -133,7 +136,7 @@ class MainWindow(QMainWindow):
         try:
             self.load_environment(discover_claude_environment())
         except Exception as exc:  # pragma: no cover - exercised manually
-            self.status_label.setText(f"Scan failed: {exc}")
+            self.status_label.setText(f"扫描失败：{exc}")
 
     def load_environment(self, env: ClaudeEnvironment) -> None:
         self.env = env
@@ -142,8 +145,7 @@ class MainWindow(QMainWindow):
         self._loaded_tree_signature = self.tree_signature()
         self.refresh_execute_state()
         self.status_label.setText(
-            f"Loaded {sum(len(account.sessions) for account in self.accounts)} sessions "
-            f"from {env.sessions_root}"
+            f"已加载 {sum(len(account.sessions) for account in self.accounts)} 个会话（{env.sessions_root}）"
         )
 
     def show_dry_run(self) -> None:
@@ -154,7 +156,7 @@ class MainWindow(QMainWindow):
         copy_count = len(planned) - move_count
         layout_status = "yes" if has_tree_changes else "no"
         self.status_label.setText(
-            f"Dry-run: {move_count} 个移动, {copy_count} 个复制; 布局更新: {layout_status}."
+            f"预览：{move_count} 个移动、{copy_count} 个复制；布局更新：{layout_status}。（未写入磁盘）"
         )
 
     def show_not_implemented(self) -> None:
@@ -166,11 +168,11 @@ class MainWindow(QMainWindow):
     def show_backups_dialog(self) -> None:
         backups = self.available_backups()
         if not backups:
-            self.status_label.setText(f"No backups found in {self.backup_parent}.")
+            self.status_label.setText(f"在 {self.backup_parent} 未找到备份。")
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Backups")
+        dialog.setWindowTitle("备份")
         layout = QVBoxLayout()
         list_widget = QListWidget()
         for backup in backups:
@@ -181,7 +183,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(list_widget)
 
         buttons = QDialogButtonBox()
-        restore_button = buttons.addButton("Restore Selected", QDialogButtonBox.ButtonRole.AcceptRole)
+        restore_button = buttons.addButton("恢复所选", QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.addButton(QDialogButtonBox.StandardButton.Close)
         layout.addWidget(buttons)
         dialog.setLayout(layout)
@@ -196,22 +198,22 @@ class MainWindow(QMainWindow):
             if self.process_checker():
                 QMessageBox.warning(
                     dialog,
-                    "Claude is running",
-                    "Close Claude Desktop / Claude Code Desktop before restoring a backup.",
+                    "Claude 正在运行",
+                    "请先关闭 Claude Desktop / Claude Code Desktop 再恢复备份。",
                 )
                 return
             answer = QMessageBox.question(
                 dialog,
-                "Restore backup",
-                f"Restore backup {backup.root.name}?\n\n"
-                f"This replaces the sessions tree at:\n{backup.sessions_root}",
+                "恢复备份",
+                f"恢复备份 {backup.root.name}？\n\n"
+                f"这将替换以下目录的会话树：\n{backup.sessions_root}",
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
             restore_backup(backup)
             if self.env is not None:
                 self.load_environment(self.env)
-            self.status_label.setText(f"Restored backup {backup.root.name}.")
+            self.status_label.setText(f"已恢复备份 {backup.root.name}。")
             dialog.accept()
 
         restore_button.clicked.connect(restore_selected)
@@ -222,26 +224,26 @@ class MainWindow(QMainWindow):
         if self.process_checker():
             self.execute_button.setEnabled(False)
             self.execute_button.setToolTip(
-                "Close Claude Desktop / Claude Code Desktop before executing changes. "
-                "Note: the Claude Code CLI also runs as claude.exe and triggers this check."
+                "请先关闭 Claude Desktop / Claude Code Desktop 再执行。"
+                "注意：Claude Code CLI 也以 claude.exe 运行，会触发此检查。"
             )
         else:
             self.execute_button.setEnabled(True)
-            self.execute_button.setToolTip("Execute staged tree changes.")
+            self.execute_button.setToolTip("执行暂存的变更（会先弹出确认框）。")
 
     def execute_plan(self) -> None:
         self.refresh_execute_state()
         if self.process_checker():
-            self.status_label.setText("Close Claude Desktop before migrating.")
-            QMessageBox.warning(self, "Claude Desktop is running", "Close Claude Desktop before migrating.")
+            self.status_label.setText("请先关闭 Claude Desktop。")
+            QMessageBox.warning(self, "Claude 正在运行", "请先关闭 Claude Desktop 再执行迁移。")
             return
         if self.env is None:
-            self.status_label.setText("Scan before migrating.")
+            self.status_label.setText("请先扫描。")
             return
         planned = self.planned_session_moves()
         has_tree_changes = self.tree_signature() != self._loaded_tree_signature
         if not planned and not has_tree_changes:
-            self.status_label.setText("No staged changes.")
+            self.status_label.setText("没有暂存的修改。")
             return
         copied = 0
         removed = 0
@@ -275,7 +277,7 @@ class MainWindow(QMainWindow):
                     config_path=root.parent / "claude_desktop_config.json",
                 )
         except Exception as exc:
-            self.status_label.setText(f"Backup failed; execution cancelled: {exc}")
+            self.status_label.setText(f"备份失败，执行已取消：{exc}")
             return
 
         by_move_target: dict[tuple[MigrationMode, Path, Path, str, str, str], list[ClaudeSession]] = {}
@@ -338,15 +340,15 @@ class MainWindow(QMainWindow):
             self.load_environment(self.env)
             if restore_errors:
                 self.status_label.setText(
-                    f"Execution failed: {exc}. ROLLBACK INCOMPLETE for {len(restore_errors)} root(s) "
-                    f"({'; '.join(restore_errors)}). Restore manually from {self.backup_parent}."
+                    f"执行失败：{exc}。有 {len(restore_errors)} 个目录回滚失败（{'; '.join(restore_errors)}），"
+                    f"请从 {self.backup_parent} 手动恢复。"
                 )
             else:
-                self.status_label.setText(f"Execution failed and rolled back: {exc}")
+                self.status_label.setText(f"执行失败，已全部回滚：{exc}")
             return
 
         self.load_environment(self.env)
-        self.status_label.setText(f"Executed {copied} file move(s); removed {removed} source metadata file(s).")
+        self.status_label.setText(f"执行完成：写入 {copied} 个文件，移除 {removed} 个源文件。")
 
     def _confirm_execution(self, summary: str) -> bool:
         if self.execute_confirmer is not None:
@@ -532,7 +534,7 @@ class MainWindow(QMainWindow):
                     account_item.addChild(group_item)
                     group_item.setExpanded(True)
                     code_group_items[session.code_group_id] = group_item
-                session_item = QTreeWidgetItem([session.title, str(session.last_activity_at or "")])
+                session_item = QTreeWidgetItem([session.title, format_activity_timestamp(session.last_activity_at)])
                 session_item.setData(0, Qt.ItemDataRole.UserRole, session)
                 session_item.setFlags(
                     Qt.ItemFlag.ItemIsEnabled

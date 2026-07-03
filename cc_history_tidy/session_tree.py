@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QKeySequence
 from PySide6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
@@ -17,6 +19,15 @@ MOVE_BADGE_COLOR = QColor(30, 100, 200)
 COPY_BADGE_COLOR = QColor(30, 140, 60)
 MOVE_BADGE_TEXT = "待移入"
 COPY_BADGE_TEXT = "⊕ 待复制"
+
+
+def format_activity_timestamp(epoch_ms: int | None) -> str:
+    if not epoch_ms:
+        return ""
+    try:
+        return datetime.fromtimestamp(epoch_ms / 1000).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return str(epoch_ms)
 
 
 class SessionTreeWidget(QTreeWidget):
@@ -166,7 +177,7 @@ class SessionTreeWidget(QTreeWidget):
                         session_item.setText(1, MOVE_BADGE_TEXT)
                         session_item.setForeground(1, QBrush(MOVE_BADGE_COLOR))
                     else:
-                        session_item.setText(1, str(session.last_activity_at or ""))
+                        session_item.setText(1, format_activity_timestamp(session.last_activity_at))
                         if session_item not in self.clipboard_items:
                             session_item.setForeground(1, QBrush())
 

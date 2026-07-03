@@ -355,7 +355,7 @@ def test_execute_rolls_back_files_when_config_write_fails(tmp_path, monkeypatch)
 
     assert source_file.exists()
     assert not target_file.exists()
-    assert "rolled back" in window.status_label.text()
+    assert "已全部回滚" in window.status_label.text()
 
 
 def test_main_window_executes_code_group_only_move_without_filesystem_move(tmp_path):
@@ -409,8 +409,8 @@ def test_dry_run_reports_layout_only_changes(tmp_path):
 
     window.show_dry_run()
 
-    assert "0 个移动, 0 个复制" in window.status_label.text()
-    assert "布局更新: yes" in window.status_label.text()
+    assert "0 个移动、0 个复制" in window.status_label.text()
+    assert "布局更新：yes" in window.status_label.text()
 
 
 def test_execute_button_disabled_when_claude_is_running(tmp_path):
@@ -426,7 +426,7 @@ def test_execute_button_disabled_when_claude_is_running(tmp_path):
     window.load_environment(env)
 
     assert not window.execute_button.isEnabled()
-    assert "Close Claude" in window.execute_button.toolTip()
+    assert "关闭 Claude" in window.execute_button.toolTip()
 
 
 def test_main_window_lists_available_backups(tmp_path):
