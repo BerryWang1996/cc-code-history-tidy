@@ -39,6 +39,7 @@ class SessionTreeWidget(QTreeWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.clipboard_mode: MigrationMode | None = None
+        self.clipboard_kind: str | None = None
         self.clipboard_items: list[QTreeWidgetItem] = []
         self.undo_stack: list = []
         self.redo_stack: list = []
@@ -88,33 +89,49 @@ class SessionTreeWidget(QTreeWidget):
         return self._stash_clipboard(MigrationMode.MOVE)
 
     def _stash_clipboard(self, mode: MigrationMode) -> int:
-        items = [
+        selected = [item for item in self.selectedItems() if not self.is_ghost_item(item)]
+        sessions = [item for item in selected if self.item_kind(item) == "session"]
+        groups = [
             item
-            for item in self.selectedItems()
-            if self.item_kind(item) == "session" and not self.is_ghost_item(item)
+            for item in selected
+            if self.item_kind(item) == "group"
+            and item.data(0, Qt.ItemDataRole.UserRole) != UNGROUPED_CODE_GROUP_ID
         ]
+        if sessions and groups:
+            self.statusMessage.emit(tr("status.mixed_selection"))
+            return 0
+        items = sessions or groups
         if not items:
-            self.statusMessage.emit("先选中要复制/剪切的对话。")
+            self.statusMessage.emit(tr("status.select_first"))
             return 0
         self.clear_clipboard()
         self.clipboard_mode = mode
+        self.clipboard_kind = "session" if sessions else "group"
         self.clipboard_items = items
         if mode == MigrationMode.MOVE:
             for item in items:
-                self._set_item_dimmed(item, True)
-            self.statusMessage.emit(f"已剪切 {len(items)} 个对话——右键目标分组粘贴 (Ctrl+V)。")
+                self._set_subtree_dimmed(item, True)
+            self.statusMessage.emit(tr("status.cut_n", n=len(items)))
         else:
-            self.statusMessage.emit(f"已复制 {len(items)} 个对话——右键目标分组粘贴 (Ctrl+V)。")
+            self.statusMessage.emit(tr("status.copied_n", n=len(items)))
         return len(items)
 
     def clear_clipboard(self) -> None:
         for item in self.clipboard_items:
             try:
-                self._set_item_dimmed(item, False)
+                self._set_subtree_dimmed(item, False)
             except RuntimeError:
                 pass  # item was destroyed by a tree rebuild
         self.clipboard_items = []
         self.clipboard_mode = None
+        self.clipboard_kind = None
+
+    def _set_subtree_dimmed(self, item: QTreeWidgetItem, dimmed: bool) -> None:
+        self._set_item_dimmed(item, dimmed)
+        if not dimmed and self.is_ghost_item(item):
+            item.setForeground(1, QBrush(COPY_BADGE_COLOR))
+        for index in range(item.childCount()):
+            self._set_subtree_dimmed(item.child(index), dimmed)
 
     def is_ghost_item(self, item: QTreeWidgetItem) -> bool:
         return item.data(0, STAGED_MODE_ROLE) == "copy"
@@ -127,11 +144,13 @@ class SessionTreeWidget(QTreeWidget):
 
     def paste_to(self, target_item: QTreeWidgetItem | None) -> int:
         if self.clipboard_mode is None or not self.clipboard_items:
-            self.statusMessage.emit("剪贴板为空——先复制 (Ctrl+C) 或剪切 (Ctrl+X)。")
+            self.statusMessage.emit(tr("status.paste_empty"))
             return 0
+        if self.clipboard_kind == "group":
+            return self._paste_groups_to(target_item)
         placement = self._paste_placement(target_item)
         if placement is None:
-            self.statusMessage.emit("只能粘贴到分组、账户或对话上。")
+            self.statusMessage.emit(tr("status.paste_target_invalid"))
             return 0
         group_item, insert_index = placement
         mode = self.clipboard_mode
@@ -161,6 +180,108 @@ class SessionTreeWidget(QTreeWidget):
             self.refresh_staged_markers()
             self.treeChanged.emit()
         return pasted
+
+    def _paste_groups_to(self, target_item: QTreeWidgetItem | None) -> int:
+        account_item = self._account_for_target(target_item)
+        if account_item is None:
+            self.statusMessage.emit(tr("status.paste_target_invalid"))
+            return 0
+        mode = self.clipboard_mode
+        groups = [item for item in self.clipboard_items if self._item_alive(item)]
+        self.push_undo_snapshot()
+        pasted = 0
+        for group_item in groups:
+            if mode == MigrationMode.MOVE:
+                if group_item.parent() is account_item:
+                    # pasted back into its own account: nothing to move
+                    self._set_subtree_dimmed(group_item, False)
+                    continue
+                pasted += self._merge_or_attach_group(group_item, account_item)
+            else:
+                pasted += self._paste_ghost_group(group_item, account_item)
+        if mode == MigrationMode.MOVE:
+            self.clear_clipboard()
+        if pasted == 0:
+            self.undo_stack.pop()
+        else:
+            self.refresh_staged_markers()
+            self.treeChanged.emit()
+        return pasted
+
+    def _account_for_target(self, target_item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
+        current = target_item
+        while current is not None and current.parent() is not None:
+            current = current.parent()
+        if current is not None and self.item_kind(current) == "account":
+            return current
+        return None
+
+    def _find_group_by_label(
+        self, account_item: QTreeWidgetItem, label: str
+    ) -> QTreeWidgetItem | None:
+        for index in range(account_item.childCount()):
+            child = account_item.child(index)
+            if self.item_kind(child) != "group":
+                continue
+            if child.data(0, Qt.ItemDataRole.UserRole) == UNGROUPED_CODE_GROUP_ID:
+                continue
+            if child.text(0).strip() == label.strip():
+                return child
+        return None
+
+    def _group_insert_index(self, account_item: QTreeWidgetItem) -> int:
+        for index in range(account_item.childCount()):
+            child = account_item.child(index)
+            if child.data(0, Qt.ItemDataRole.UserRole) == UNGROUPED_CODE_GROUP_ID:
+                return index
+        return account_item.childCount()
+
+    def _merge_or_attach_group(
+        self, group_item: QTreeWidgetItem, account_item: QTreeWidgetItem
+    ) -> int:
+        source_account = group_item.parent()
+        existing = self._find_group_by_label(account_item, group_item.text(0))
+        self._set_subtree_dimmed(group_item, False)
+        if existing is not None and existing is not group_item:
+            moved = 0
+            while group_item.childCount():
+                existing.addChild(group_item.takeChild(0))
+                moved += 1
+            if source_account is not None:
+                source_account.takeChild(source_account.indexOfChild(group_item))
+            return max(moved, 1)
+        if source_account is not None:
+            source_account.takeChild(source_account.indexOfChild(group_item))
+        account_item.insertChild(self._group_insert_index(account_item), group_item)
+        group_item.setExpanded(True)
+        return 1
+
+    def _paste_ghost_group(
+        self, group_item: QTreeWidgetItem, account_item: QTreeWidgetItem
+    ) -> int:
+        sessions = [
+            group_item.child(index)
+            for index in range(group_item.childCount())
+            if self.item_kind(group_item.child(index)) == "session"
+            and not self.is_ghost_item(group_item.child(index))
+        ]
+        if not sessions:
+            return 0
+        existing = self._find_group_by_label(account_item, group_item.text(0))
+        if existing is not None and existing is not group_item:
+            container = existing
+        else:
+            container = _new_code_group_item(
+                group_item.text(0),
+                str(group_item.data(0, Qt.ItemDataRole.UserRole) or ""),
+                str(group_item.data(0, Qt.ItemDataRole.UserRole + 1) or ""),
+            )
+            build_ghost_group_marker(container, "copy")
+            account_item.insertChild(self._group_insert_index(account_item), container)
+            container.setExpanded(True)
+        for session_item in sessions:
+            container.addChild(self._make_ghost_copy(session_item))
+        return len(sessions)
 
     def _paste_placement(
         self, target_item: QTreeWidgetItem | None
@@ -228,18 +349,22 @@ class SessionTreeWidget(QTreeWidget):
 
     def _context_actions_for(self, item: QTreeWidgetItem):
         kind = self.item_kind(item)
-        if kind == "session" and self.is_ghost_item(item):
-            return [("撤销此暂存副本", lambda checked=False, it=item: self.remove_ghost_item(it))]
+        if self.is_ghost_item(item):
+            return [(tr("menu.undo_ghost"), lambda checked=False, it=item: self.remove_ghost_item(it))]
         actions = []
-        if kind == "session":
-            actions.append(("复制\tCtrl+C", lambda checked=False: self.copy_selected_sessions()))
-            actions.append(("剪切\tCtrl+X", lambda checked=False: self.cut_selected_sessions()))
+        copyable = kind == "session" or (
+            kind == "group"
+            and item.data(0, Qt.ItemDataRole.UserRole) != UNGROUPED_CODE_GROUP_ID
+        )
+        if copyable:
+            actions.append((tr("menu.copy"), lambda checked=False: self.copy_selected_sessions()))
+            actions.append((tr("menu.cut"), lambda checked=False: self.cut_selected_sessions()))
         if (
             kind in {"group", "account", "session"}
             and self.clipboard_mode is not None
             and self.clipboard_items
         ):
-            actions.append(("粘贴\tCtrl+V", lambda checked=False, it=item: self.paste_to(it)))
+            actions.append((tr("menu.paste"), lambda checked=False, it=item: self.paste_to(it)))
         return actions
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -353,7 +478,18 @@ class SessionTreeWidget(QTreeWidget):
             insert_index = target_index if self._is_above_drop(position) else target_index + 1
         else:
             return False
-        return self._move_items_under_parent(moving_items, target_account, insert_index)
+        # Groups dragged into a DIFFERENT account are a migration (cut+paste):
+        # they merge into a same-name group when one exists. Same-account
+        # drags stay pure reorders.
+        cross_account = [item for item in moving_items if item.parent() is not target_account]
+        same_account = [item for item in moving_items if item.parent() is target_account]
+        handled = False
+        for item in cross_account:
+            if self._merge_or_attach_group(item, target_account):
+                handled = True
+        if same_account:
+            handled = self._move_items_under_parent(same_account, target_account, insert_index) or handled
+        return handled
 
     def _move_sessions_to_target(self, moving_items: list[QTreeWidgetItem], target_item: QTreeWidgetItem, position) -> bool:
         target_kind = self.item_kind(target_item)

@@ -84,11 +84,11 @@ def test_new_copy_overwrites_old_cut(tmp_path):
     assert cut_item.foreground(0).color().name() != "#969696"
 
 
-def test_clipboard_ignores_group_and_account_selection(tmp_path):
+def test_clipboard_ignores_account_selection(tmp_path):
     fixture, window = _load_window(tmp_path)
     tree = window.session_tree
-    group = _find_item_by_data(tree, fixture.source_code_group_id)
-    tree.setCurrentItem(group)
+    account = tree.topLevelItem(0)
+    tree.setCurrentItem(account)
 
     assert tree.cut_selected_sessions() == 0
     assert tree.clipboard_mode is None
