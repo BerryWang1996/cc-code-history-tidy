@@ -71,6 +71,105 @@ class SessionTreeWidget(QTreeWidget):
         item.setForeground(0, brush)
         item.setForeground(1, brush)
 
+    def paste_to(self, target_item: QTreeWidgetItem | None) -> int:
+        if self.clipboard_mode is None or not self.clipboard_items:
+            self.statusMessage.emit("剪贴板为空——先复制 (Ctrl+C) 或剪切 (Ctrl+X)。")
+            return 0
+        placement = self._paste_placement(target_item)
+        if placement is None:
+            self.statusMessage.emit("只能粘贴到分组、账户或对话上。")
+            return 0
+        group_item, insert_index = placement
+        mode = self.clipboard_mode
+        items = [item for item in self.clipboard_items if self._item_alive(item)]
+        pasted = 0
+        for item in items:
+            if mode == MigrationMode.MOVE:
+                parent = item.parent()
+                if parent is None:
+                    continue
+                old_index = parent.indexOfChild(item)
+                if parent is group_item and old_index < insert_index:
+                    insert_index -= 1
+                parent.takeChild(old_index)
+                group_item.insertChild(insert_index, item)
+                self._set_item_dimmed(item, False)
+            else:
+                group_item.insertChild(insert_index, self._make_ghost_copy(item))
+            insert_index += 1
+            pasted += 1
+        if mode == MigrationMode.MOVE:
+            self.clear_clipboard()
+        self.refresh_staged_markers()
+        return pasted
+
+    def _paste_placement(
+        self, target_item: QTreeWidgetItem | None
+    ) -> tuple[QTreeWidgetItem, int] | None:
+        if target_item is None:
+            return None
+        kind = self.item_kind(target_item)
+        if kind == "group":
+            return target_item, target_item.childCount()
+        if kind == "account":
+            group = self._ungrouped_group_for_account(target_item)
+            return group, group.childCount()
+        if kind == "session":
+            group = target_item.parent()
+            if group is None:
+                return None
+            return group, group.indexOfChild(target_item) + 1
+        return None
+
+    def _item_alive(self, item: QTreeWidgetItem) -> bool:
+        try:
+            return item.treeWidget() is self
+        except RuntimeError:
+            return False
+
+    def _make_ghost_copy(self, item: QTreeWidgetItem) -> QTreeWidgetItem:
+        session = item.data(0, Qt.ItemDataRole.UserRole)
+        ghost = QTreeWidgetItem([item.text(0), COPY_BADGE_TEXT])
+        ghost.setData(0, Qt.ItemDataRole.UserRole, session)
+        ghost.setData(0, STAGED_MODE_ROLE, "copy")
+        ghost.setForeground(1, QBrush(COPY_BADGE_COLOR))
+        ghost.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        return ghost
+
+    def remove_ghost_item(self, item: QTreeWidgetItem) -> None:
+        if not self.is_ghost_item(item):
+            return
+        parent = item.parent()
+        if parent is not None:
+            parent.takeChild(parent.indexOfChild(item))
+        self.statusMessage.emit("已撤销暂存副本。")
+
+    def refresh_staged_markers(self) -> None:
+        for account_index in range(self.topLevelItemCount()):
+            account_item = self.topLevelItem(account_index)
+            account_uuid = account_item.data(0, Qt.ItemDataRole.UserRole)
+            sessions_root = account_item.data(0, Qt.ItemDataRole.UserRole + 2)
+            for group_index in range(account_item.childCount()):
+                group_item = account_item.child(group_index)
+                for session_index in range(group_item.childCount()):
+                    session_item = group_item.child(session_index)
+                    session = session_item.data(0, Qt.ItemDataRole.UserRole)
+                    if not isinstance(session, ClaudeSession):
+                        continue
+                    if self.is_ghost_item(session_item):
+                        continue
+                    staged_move = (
+                        session.account_uuid != account_uuid
+                        or session.sessions_root != sessions_root
+                    )
+                    if staged_move:
+                        session_item.setText(1, MOVE_BADGE_TEXT)
+                        session_item.setForeground(1, QBrush(MOVE_BADGE_COLOR))
+                    else:
+                        session_item.setText(1, str(session.last_activity_at or ""))
+                        if session_item not in self.clipboard_items:
+                            session_item.setForeground(1, QBrush())
+
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt override
         moving_items = self._selected_movable_items()
         target_item = self._drop_target_item(event)
@@ -80,6 +179,7 @@ class SessionTreeWidget(QTreeWidget):
             self.dropIndicatorPosition(),
         ):
             self.normalize_structure()
+            self.refresh_staged_markers()
             event.acceptProposedAction()
             return
         event.ignore()
