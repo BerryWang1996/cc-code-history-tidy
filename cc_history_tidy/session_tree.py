@@ -1,16 +1,76 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
 
 from cc_history_tidy.code_groups import (
     UNGROUPED_CODE_GROUP_ID,
     UNGROUPED_CODE_GROUP_LABEL,
 )
-from cc_history_tidy.models import ClaudeSession
+from cc_history_tidy.models import ClaudeSession, MigrationMode
+
+STAGED_MODE_ROLE = Qt.ItemDataRole.UserRole + 3
+
+CUT_DIM_COLOR = QColor(150, 150, 150)
+MOVE_BADGE_COLOR = QColor(30, 100, 200)
+COPY_BADGE_COLOR = QColor(30, 140, 60)
+MOVE_BADGE_TEXT = "待移入"
+COPY_BADGE_TEXT = "⊕ 待复制"
 
 
 class SessionTreeWidget(QTreeWidget):
+    statusMessage = Signal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.clipboard_mode: MigrationMode | None = None
+        self.clipboard_items: list[QTreeWidgetItem] = []
+
+    def copy_selected_sessions(self) -> int:
+        return self._stash_clipboard(MigrationMode.COPY)
+
+    def cut_selected_sessions(self) -> int:
+        return self._stash_clipboard(MigrationMode.MOVE)
+
+    def _stash_clipboard(self, mode: MigrationMode) -> int:
+        items = [
+            item
+            for item in self.selectedItems()
+            if self.item_kind(item) == "session" and not self.is_ghost_item(item)
+        ]
+        if not items:
+            self.statusMessage.emit("先选中要复制/剪切的对话。")
+            return 0
+        self.clear_clipboard()
+        self.clipboard_mode = mode
+        self.clipboard_items = items
+        if mode == MigrationMode.MOVE:
+            for item in items:
+                self._set_item_dimmed(item, True)
+            self.statusMessage.emit(f"已剪切 {len(items)} 个对话——右键目标分组粘贴 (Ctrl+V)。")
+        else:
+            self.statusMessage.emit(f"已复制 {len(items)} 个对话——右键目标分组粘贴 (Ctrl+V)。")
+        return len(items)
+
+    def clear_clipboard(self) -> None:
+        for item in self.clipboard_items:
+            try:
+                self._set_item_dimmed(item, False)
+            except RuntimeError:
+                pass  # item was destroyed by a tree rebuild
+        self.clipboard_items = []
+        self.clipboard_mode = None
+
+    def is_ghost_item(self, item: QTreeWidgetItem) -> bool:
+        return item.data(0, STAGED_MODE_ROLE) == "copy"
+
+    @staticmethod
+    def _set_item_dimmed(item: QTreeWidgetItem, dimmed: bool) -> None:
+        brush = QBrush(CUT_DIM_COLOR) if dimmed else QBrush()
+        item.setForeground(0, brush)
+        item.setForeground(1, brush)
+
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt override
         moving_items = self._selected_movable_items()
         target_item = self._drop_target_item(event)
