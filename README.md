@@ -90,20 +90,29 @@ The app displays this as:
 The UI is a single editable tree that behaves like a file manager. Everything
 is simulated until `Execute`:
 
-- Right-click a conversation (multi-select supported): `复制 (Ctrl+C)` /
-  `剪切 (Ctrl+X)`; right-click a target group/account/conversation:
-  `粘贴 (Ctrl+V)`. `Esc` clears the clipboard.
-- Cut conversations are dimmed until pasted. Pasted copies appear as green
+- Right-click a conversation **or a Code group** (multi-select supported):
+  `复制 (Ctrl+C)` / `剪切 (Ctrl+X)`; right-click a target
+  group/account/conversation: `粘贴 (Ctrl+V)`. `Esc` clears the clipboard.
+  The virtual `Ungrouped` group cannot be copied or cut.
+- Pasting/dragging a group into an account that already has a group with the
+  **same display name** merges the sessions into the existing group.
+- Cut items are dimmed until pasted. Pasted copies appear as green
   `⊕ 待复制` ghost entries (right-click one to undo it); conversations staged
   to move into another account show a blue `待移入` badge.
 - Dragging = move. Dragging inside one account only regroups (layout change,
   no file moves); dragging/pasting into another account or install root moves
   the metadata file at Execute time.
-- Copies are written with a fresh `sessionId` and start out ungrouped; the
-  original keeps its place and grouping.
+- Copies are written with a fresh `sessionId` and land in the group they were
+  pasted into; the original keeps its place and grouping.
+- `Ctrl+Z` undoes the last tree edit (up to 50 steps), `Ctrl+Y` redoes;
+  the `重置` button restores the tree to the state right after scanning.
 - `Execute` shows a summary ("移动 N 个对话、创建 M 个副本、更新分组布局")
   and only writes after confirmation, with full per-root backups. Re-`Scan`
   discards all staged edits and the clipboard.
+
+The UI is bilingual (中文 / English). It defaults to the system language and
+can be switched from the combo box in the toolbar; the choice is saved to
+`~/.claude-desktop-migrator/settings.json`.
 
 Group layout for each install root is written to that root's own
 `claude_desktop_config.json`. If Claude Desktop / Claude Code Desktop is
