@@ -65,6 +65,7 @@ def save_code_group_layout_to_desktop_config(
     visible_session_keys: set[str],
     assignments: dict[str, str],
     order_data: dict[str, list[str]],
+    group_labels: dict[str, str] | None = None,
 ) -> None:
     data = _read_desktop_config_strict(config_path)
     preferences = _ensure_dict(data, "preferences")
@@ -86,6 +87,13 @@ def save_code_group_layout_to_desktop_config(
     for group_id, session_keys in order_data.items():
         cleaned_order[group_id] = list(session_keys)
     slice_data["customGroupOrder"] = cleaned_order
+
+    if group_labels:
+        existing_labels = _custom_group_labels(slice_data.get("customGroups"))
+        existing_labels.update(group_labels)
+        slice_data["customGroups"] = [
+            {"id": group_id, "name": name} for group_id, name in existing_labels.items()
+        ]
 
     _atomic_write_json(config_path, data)
 

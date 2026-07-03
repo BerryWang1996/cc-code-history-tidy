@@ -73,3 +73,35 @@ def test_save_creates_config_when_missing(tmp_path):
     data = json.loads(config_path.read_text(encoding="utf-8"))
     slice_data = data["preferences"]["epitaxyPrefs"]["dframe-local-slice"]
     assert slice_data["customGroupAssignments"] == {"code:s1": "cg-a"}
+
+
+def test_save_writes_group_labels_preserving_existing(tmp_path):
+    config_path = tmp_path / "claude_desktop_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "preferences": {
+                    "epitaxyPrefs": {
+                        "dframe-local-slice": {
+                            "customGroups": [{"id": "cg-old", "name": "Old"}],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    save_code_group_layout_to_desktop_config(
+        config_path,
+        visible_session_keys=set(),
+        assignments={"code:s1": "cg-a"},
+        order_data={"cg-a": ["code:s1"]},
+        group_labels={"cg-a": "New Group"},
+    )
+
+    slice_data = json.loads(config_path.read_text(encoding="utf-8"))["preferences"][
+        "epitaxyPrefs"
+    ]["dframe-local-slice"]
+    labels = {group["id"]: group["name"] for group in slice_data["customGroups"]}
+    assert labels == {"cg-old": "Old", "cg-a": "New Group"}
