@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cc-code-history-tidy"
+version = "0.1.0"
+description = "Claude Desktop Code history migration tool"
+requires-python = ">=3.11"
+dependencies = [
+  "chromium-reader>=0.1.1",
+  "PySide6>=6.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-qt>=4.4",
+  "pyinstaller>=6.0",
+]
+
+[project.scripts]
+cc-history-tidy = "cc_history_tidy.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

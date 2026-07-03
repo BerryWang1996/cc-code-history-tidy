@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+import hashlib
+from pathlib import Path
+
+
+class MigrationMode(str, Enum):
+    COPY = "copy"
+    MOVE = "move"
+
+
+@dataclass(frozen=True)
+class AccountPartition:
+    account_uuid: str
+    root: Path
+    is_current: bool
+
+    @property
+    def display_name(self) -> str:
+        digest = hashlib.sha256(self.account_uuid.encode("utf-8")).hexdigest()[:8].upper()
+        suffix = "current" if self.is_current else "source"
+        return f"Account {digest} ({suffix})"
+
+
+@dataclass(frozen=True)
+class ClaudeSession:
+    metadata_path: Path
+    account_uuid: str
+    session_id: str
+    cli_session_id: str
+    group_id: str
+    title: str
+    cwd: str
+    created_at: int | None
+    last_activity_at: int | None
+    archived: bool
+    transcript_path: Path | None
+    group_label: str = ""
+    code_group_id: str = "ungrouped"
+    code_group_label: str = "Ungrouped"
+    code_group_order: int = 1_000_000
+    code_session_order: int = 1_000_000
+
+    @property
+    def has_transcript(self) -> bool:
+        return self.transcript_path is not None and self.transcript_path.exists()
+
+
+@dataclass(frozen=True)
+class ScannedAccount:
+    partition: AccountPartition
+    sessions: tuple[ClaudeSession, ...]
+
+
+@dataclass(frozen=True)
+class MigrationItem:
+    source: ClaudeSession
+    target_metadata_path: Path
+
+
+@dataclass(frozen=True)
+class MigrationPlan:
+    mode: MigrationMode
+    target_account: AccountPartition
+    items: tuple[MigrationItem, ...]
+
+
+@dataclass(frozen=True)
+class MigrationResult:
+    copied: tuple[Path, ...]
+    removed: tuple[Path, ...]
+    backup_root: Path

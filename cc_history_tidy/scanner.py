@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from cc_history_tidy.models import AccountPartition, ClaudeSession, ScannedAccount
+from cc_history_tidy.paths import ClaudeEnvironment
+from cc_history_tidy.group_labels import resolve_group_labels
+from cc_history_tidy.code_groups import CodeGroupLayout, load_code_group_layout
+
+
+def scan_accounts(env: ClaudeEnvironment) -> list[ScannedAccount]:
+    transcript_index = _index_transcripts(env.transcript_root)
+    group_labels = resolve_group_labels(env)
+    code_groups = load_code_group_layout(env)
+    accounts: list[ScannedAccount] = []
+    for account_dir in sorted(p for p in env.sessions_root.iterdir() if p.is_dir()):
+        partition = AccountPartition(
+            account_uuid=account_dir.name,
+            root=account_dir,
+            is_current=account_dir.name == env.current_account_uuid,
+        )
+        sessions = tuple(
+            sorted(
+                _scan_sessions(account_dir, transcript_index, group_labels, code_groups),
+                key=lambda session: (
+                    session.code_group_order,
+                    session.code_session_order,
+                    -(session.last_activity_at or 0),
+                    session.title,
+                ),
+            )
+        )
+        accounts.append(ScannedAccount(partition=partition, sessions=sessions))
+    return accounts
+
+
+def _index_transcripts(transcript_root: Path) -> dict[str, Path]:
+    if not transcript_root.exists():
+        return {}
+    return {path.stem: path for path in transcript_root.rglob("*.jsonl")}
+
+
+def _scan_sessions(
+    account_dir: Path,
+    transcript_index: dict[str, Path],
+    group_labels: dict[str, str],
+    code_groups: CodeGroupLayout,
+) -> list[ClaudeSession]:
+    sessions: list[ClaudeSession] = []
+    for metadata_path in sorted(account_dir.rglob("*.json")):
+        try:
+            data = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        session_id = data.get("sessionId")
+        cli_session_id = data.get("cliSessionId")
+        if not session_id or not cli_session_id:
+            continue
+        relative = metadata_path.relative_to(account_dir)
+        group_id = relative.parts[0] if len(relative.parts) > 1 else ""
+        code_group_id = code_groups.group_for_session(session_id)
+        sessions.append(
+            ClaudeSession(
+                metadata_path=metadata_path,
+                account_uuid=account_dir.name,
+                session_id=session_id,
+                cli_session_id=cli_session_id,
+                group_id=group_id,
+                title=data.get("title") or cli_session_id,
+                cwd=data.get("cwd") or "",
+                created_at=data.get("createdAt"),
+                last_activity_at=data.get("lastActivityAt"),
+                archived=bool(data.get("isArchived", False)),
+                transcript_path=transcript_index.get(cli_session_id),
+                group_label=group_labels.get(group_id, group_id or "(root)"),
+                code_group_id=code_group_id,
+                code_group_label=code_groups.label_for_group(code_group_id),
+                code_group_order=code_groups.order_for_group(code_group_id),
+                code_session_order=code_groups.order_for_session(session_id),
+            )
+        )
+    return sessions

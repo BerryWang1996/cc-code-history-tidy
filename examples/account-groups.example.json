@@ -1,0 +1,10 @@
+{
+  "accounts": {
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa": {
+      "label": "Current Work"
+    },
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb": {
+      "label": "Old Personal"
+    }
+  }
+}
