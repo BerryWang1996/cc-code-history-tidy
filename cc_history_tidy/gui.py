@@ -311,6 +311,7 @@ class MainWindow(QMainWindow):
         )
 
     def show_dry_run(self) -> None:
+        self.refresh_execute_state()
         planned = self.planned_session_moves()
         has_tree_changes = self.tree_signature() != self._loaded_tree_signature
         layout_status = "yes" if has_tree_changes else "no"
@@ -333,7 +334,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         list_widget = QListWidget()
         for backup in backups:
-            item = QListWidgetItem(backup.root.name)
+            reason = backup.reason or "backup"
+            item = QListWidgetItem(f"{backup.root.name}  [{reason}]  ->  {backup.sessions_root}")
             item.setData(Qt.ItemDataRole.UserRole, backup)
             list_widget.addItem(item)
         layout.addWidget(list_widget)
@@ -351,10 +353,18 @@ class MainWindow(QMainWindow):
             backup = item.data(Qt.ItemDataRole.UserRole)
             if not isinstance(backup, BackupSnapshot):
                 return
+            if self.process_checker():
+                QMessageBox.warning(
+                    dialog,
+                    "Claude is running",
+                    "Close Claude Desktop / Claude Code Desktop before restoring a backup.",
+                )
+                return
             answer = QMessageBox.question(
                 dialog,
                 "Restore backup",
-                f"Restore backup {backup.root.name}? This replaces the current claude-code-sessions tree.",
+                f"Restore backup {backup.root.name}?\n\n"
+                f"This replaces the sessions tree at:\n{backup.sessions_root}",
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
@@ -371,7 +381,10 @@ class MainWindow(QMainWindow):
     def refresh_execute_state(self) -> None:
         if self.process_checker():
             self.execute_button.setEnabled(False)
-            self.execute_button.setToolTip("Close Claude Desktop / Claude Code Desktop before executing changes.")
+            self.execute_button.setToolTip(
+                "Close Claude Desktop / Claude Code Desktop before executing changes. "
+                "Note: the Claude Code CLI also runs as claude.exe and triggers this check."
+            )
         else:
             self.execute_button.setEnabled(True)
             self.execute_button.setToolTip("Execute staged tree changes.")
@@ -392,17 +405,45 @@ class MainWindow(QMainWindow):
             return
         copied = 0
         removed = 0
-        config_path = self.env.sessions_root.parent / "claude_desktop_config.json"
+        mode = self.selected_migration_mode()
+
+        # In COPY mode the dragged session stays where it was and the duplicate
+        # is written with a fresh sessionId. The dragged tree item must not
+        # contribute to the staged layout: purging/reassigning the original's
+        # assignment or writing the old id into the target root's config would
+        # corrupt both configs.
+        excluded_session_ids = (
+            {move.session.session_id for move in planned}
+            if mode == MigrationMode.COPY
+            else set()
+        )
+        visible_keys, layout_by_root = self.staged_code_group_layout_by_root(
+            exclude_session_ids=excluded_session_ids
+        )
+
+        # Every root that is read from or written to during this execution gets
+        # its own backup so a failure can roll back all of them, not just the
+        # primary root.
+        involved_roots: set[Path] = {self.env.sessions_root}
+        for move in planned:
+            involved_roots.add(move.source_sessions_root)
+            involved_roots.add(move.target_sessions_root)
+        if has_tree_changes:
+            involved_roots.update(layout_by_root.keys())
+
+        backups: dict[Path, BackupSnapshot] = {}
         try:
-            execution_backup = create_backup(
-                self.env.sessions_root,
-                self.backup_parent,
-                reason="execute",
-                config_path=config_path,
-            )
+            for root in sorted(involved_roots):
+                backups[root] = create_backup(
+                    root,
+                    self.backup_parent,
+                    reason="execute",
+                    config_path=root.parent / "claude_desktop_config.json",
+                )
         except Exception as exc:
             self.status_label.setText(f"Backup failed; execution cancelled: {exc}")
             return
+
         by_move_target: dict[tuple[Path, Path, str, str, str], list[ClaudeSession]] = {}
         for move in planned:
             key = (
@@ -427,27 +468,39 @@ class MainWindow(QMainWindow):
                     source_account_uuid=source_account_uuid,
                     target_account_uuid=target_account_uuid,
                     session_files=[session.metadata_path for session in sessions],
-                    mode=self.selected_migration_mode(),
+                    mode=mode,
                     backup_root=self.backup_parent,
                     target_group_id=target_group_id,
                     config_path=target_sessions_root.parent / "claude_desktop_config.json",
                     target_sessions_root=target_sessions_root,
+                    reuse_backup=backups[source_sessions_root],
                 )
                 copied += len(result.copied)
                 removed += len(result.removed)
 
             if has_tree_changes:
-                visible_keys, assignments, order_data = self.staged_code_group_layout()
-                save_code_group_layout_to_desktop_config(
-                    config_path,
-                    visible_keys,
-                    assignments,
-                    order_data,
-                )
+                for root, (assignments, order_data) in layout_by_root.items():
+                    save_code_group_layout_to_desktop_config(
+                        root.parent / "claude_desktop_config.json",
+                        visible_keys,
+                        assignments,
+                        order_data,
+                    )
         except Exception as exc:
-            restore_backup(execution_backup)
+            restore_errors: list[str] = []
+            for root, backup in backups.items():
+                try:
+                    restore_backup(backup)
+                except Exception as restore_exc:  # pragma: no cover - disk-level failure
+                    restore_errors.append(f"{root}: {restore_exc}")
             self.load_environment(self.env)
-            self.status_label.setText(f"Execution failed and rolled back: {exc}")
+            if restore_errors:
+                self.status_label.setText(
+                    f"Execution failed: {exc}. ROLLBACK INCOMPLETE for {len(restore_errors)} root(s) "
+                    f"({'; '.join(restore_errors)}). Restore manually from {self.backup_parent}."
+                )
+            else:
+                self.status_label.setText(f"Execution failed and rolled back: {exc}")
             return
 
         self.load_environment(self.env)
@@ -485,18 +538,23 @@ class MainWindow(QMainWindow):
                     session = session_item.data(0, Qt.ItemDataRole.UserRole)
                     if not isinstance(session, ClaudeSession):
                         continue
-                    target_group_id = self._target_filesystem_group_id(account_item, group_id, session, account_uuid)
-                    if session.account_uuid != account_uuid or session.group_id != target_group_id:
-                        moves.append(
-                            PlannedSessionMove(
-                                session=session,
-                                source_sessions_root=session.sessions_root,
-                                target_sessions_root=target_sessions_root,
-                                target_account_uuid=account_uuid,
-                                target_group_id=target_group_id,
-                                target_code_group_id=code_group_id,
-                            )
+                    # Only a change of account or install root moves files on disk.
+                    # Regrouping between code groups is a layout-only edit: code
+                    # groups are keyed by session id, not by the org directory the
+                    # metadata file happens to live in.
+                    if session.account_uuid == account_uuid and session.sessions_root == target_sessions_root:
+                        continue
+                    target_group_id = self._target_filesystem_group_id(account_item, group_id, session)
+                    moves.append(
+                        PlannedSessionMove(
+                            session=session,
+                            source_sessions_root=session.sessions_root,
+                            target_sessions_root=target_sessions_root,
+                            target_account_uuid=account_uuid,
+                            target_group_id=target_group_id,
+                            target_code_group_id=code_group_id,
                         )
+                    )
         return moves
 
     def tree_signature(self) -> tuple[tuple[str, tuple[tuple[str, tuple[str, ...]], ...]], ...]:
@@ -521,12 +579,26 @@ class MainWindow(QMainWindow):
             accounts.append((account_uuid, tuple(groups)))
         return tuple(accounts)
 
-    def staged_code_group_layout(self) -> tuple[set[str], dict[str, str], dict[str, list[str]]]:
+    def staged_code_group_layout_by_root(
+        self,
+        exclude_session_ids: set[str] | None = None,
+    ) -> tuple[set[str], dict[Path, tuple[dict[str, str], dict[str, list[str]]]]]:
+        """Collect the staged layout, partitioned by sessions root.
+
+        Each Claude install root has its own claude_desktop_config.json, so
+        assignments/order must be written to the config of the root the account
+        lives in. The visible-key set stays global so a session migrated to a
+        different root is purged from its old root's config.
+        """
+        excluded = exclude_session_ids or set()
         visible_keys: set[str] = set()
-        assignments: dict[str, str] = {}
-        order_data: dict[str, list[str]] = {}
+        by_root: dict[Path, tuple[dict[str, str], dict[str, list[str]]]] = {}
         for account_index in range(self.session_tree.topLevelItemCount()):
             account_item = self.session_tree.topLevelItem(account_index)
+            sessions_root = account_item.data(0, Qt.ItemDataRole.UserRole + 2)
+            if not isinstance(sessions_root, Path):
+                continue
+            assignments, order_data = by_root.setdefault(sessions_root, ({}, {}))
             for group_index in range(account_item.childCount()):
                 group_item = account_item.child(group_index)
                 code_group_id = group_item.data(0, Qt.ItemDataRole.UserRole)
@@ -538,32 +610,48 @@ class MainWindow(QMainWindow):
                     session = group_item.child(session_index).data(0, Qt.ItemDataRole.UserRole)
                     if not isinstance(session, ClaudeSession):
                         continue
+                    if session.session_id in excluded:
+                        continue
                     session_key = f"code:{session.session_id}"
                     visible_keys.add(session_key)
                     if code_group_id == UNGROUPED_CODE_GROUP_ID:
                         continue
                     assignments[session_key] = code_group_id
                     order_data.setdefault(code_group_id, []).append(session_key)
-        return visible_keys, assignments, order_data
+        return visible_keys, by_root
 
     def _target_filesystem_group_id(
         self,
         account_item: QTreeWidgetItem,
         group_id: str,
         session: ClaudeSession,
-        target_account_uuid: str,
     ) -> str:
-        if session.account_uuid != target_account_uuid:
-            default_group_id = account_item.data(0, Qt.ItemDataRole.UserRole + 1)
-            return default_group_id if isinstance(default_group_id, str) and default_group_id else group_id
-        return group_id
+        # Sessions must always land under <account>/<group>/; a file directly
+        # under the account root is invisible to Claude Desktop. Prefer the
+        # target account's own group dir, then the tree group's, then keep the
+        # session's original group dir.
+        default_group_id = account_item.data(0, Qt.ItemDataRole.UserRole + 1)
+        for candidate in (default_group_id, group_id, session.group_id):
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        return session.group_id
 
     def _populate_trees(self) -> None:
         self.session_tree.clear()
+        uuid_counts: dict[str, int] = {}
+        for account in self.accounts:
+            uuid_counts[account.partition.account_uuid] = (
+                uuid_counts.get(account.partition.account_uuid, 0) + 1
+            )
         for account in self.accounts:
             display = self.account_config.display_for(account.partition.account_uuid)
+            label = display.label
+            if uuid_counts[account.partition.account_uuid] > 1:
+                # Same account signed into several Claude installs: make the
+                # duplicate tree items distinguishable by their install root.
+                label = f"{label} [{account.partition.root.parent.parent.name}]"
             account_item = QTreeWidgetItem(
-                [display.label, f"{len(account.sessions)} session(s)"]
+                [label, f"{len(account.sessions)} session(s)"]
             )
             account_item.setData(0, Qt.ItemDataRole.UserRole, account.partition.account_uuid)
             account_item.setData(0, Qt.ItemDataRole.UserRole + 1, _default_group_id(account.sessions))

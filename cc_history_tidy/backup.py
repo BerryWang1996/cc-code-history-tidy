@@ -15,6 +15,7 @@ class BackupSnapshot:
     manifest_path: Path
     config_path: Path | None = None
     snapshot_config_path: Path | None = None
+    reason: str = ""
 
 
 def create_backup(
@@ -25,30 +26,45 @@ def create_backup(
 ) -> BackupSnapshot:
     if not sessions_root.exists():
         raise FileNotFoundError(f"Sessions root does not exist: {sessions_root}")
-    created_at = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
-    root = backup_parent / created_at
+    base_name = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    created_at = base_name
+    suffix = 1
+    while True:
+        root = backup_parent / created_at
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+            break
+        except FileExistsError:
+            # Two backups within the same clock tick (e.g. one per involved
+            # root during a single execute) must not collide.
+            created_at = f"{base_name}-{suffix}"
+            suffix += 1
     snapshot_root = root / "claude-code-sessions"
-    root.mkdir(parents=True, exist_ok=False)
-    shutil.copytree(sessions_root, snapshot_root)
-    snapshot_config_path = None
-    if config_path is not None and config_path.exists():
-        snapshot_config_path = root / config_path.name
-        shutil.copy2(config_path, snapshot_config_path)
-    manifest_path = root / "backup-manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "created_at": created_at,
-                "reason": reason,
-                "sessions_root": str(sessions_root),
-                "snapshot_root": str(snapshot_root),
-                "config_path": str(config_path) if config_path is not None else None,
-                "snapshot_config_path": str(snapshot_config_path) if snapshot_config_path is not None else None,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    try:
+        shutil.copytree(sessions_root, snapshot_root)
+        snapshot_config_path = None
+        if config_path is not None and config_path.exists():
+            snapshot_config_path = root / config_path.name
+            shutil.copy2(config_path, snapshot_config_path)
+        manifest_path = root / "backup-manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "created_at": created_at,
+                    "reason": reason,
+                    "sessions_root": str(sessions_root),
+                    "snapshot_root": str(snapshot_root),
+                    "config_path": str(config_path) if config_path is not None else None,
+                    "snapshot_config_path": str(snapshot_config_path) if snapshot_config_path is not None else None,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except BaseException:
+        # Never leave a half-written snapshot that looks like a valid backup.
+        shutil.rmtree(root, ignore_errors=True)
+        raise
     return BackupSnapshot(
         root=root,
         sessions_root=sessions_root,
@@ -56,20 +72,49 @@ def create_backup(
         manifest_path=manifest_path,
         config_path=config_path,
         snapshot_config_path=snapshot_config_path,
+        reason=reason,
     )
 
 
 def restore_backup(backup: BackupSnapshot) -> None:
     if not backup.snapshot_root.exists():
         raise FileNotFoundError(f"Backup snapshot does not exist: {backup.snapshot_root}")
-    if backup.sessions_root.exists():
-        shutil.rmtree(backup.sessions_root)
-    shutil.copytree(backup.snapshot_root, backup.sessions_root)
-    if backup.config_path is not None and backup.snapshot_config_path is not None:
-        if not backup.snapshot_config_path.exists():
-            raise FileNotFoundError(f"Backup config snapshot does not exist: {backup.snapshot_config_path}")
-        backup.config_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(backup.snapshot_config_path, backup.config_path)
+
+    sessions_root = backup.sessions_root
+    staging = sessions_root.parent / f"{sessions_root.name}.restore-staging"
+    displaced = sessions_root.parent / f"{sessions_root.name}.restore-displaced"
+    shutil.rmtree(staging, ignore_errors=True)
+    shutil.rmtree(displaced, ignore_errors=True)
+
+    # Stage the snapshot copy first so the live tree is only touched by two renames.
+    shutil.copytree(backup.snapshot_root, staging)
+    try:
+        if sessions_root.exists():
+            sessions_root.rename(displaced)
+        try:
+            staging.rename(sessions_root)
+        except OSError:
+            if displaced.exists():
+                displaced.rename(sessions_root)
+            raise
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    shutil.rmtree(displaced, ignore_errors=True)
+
+    if backup.config_path is not None:
+        if backup.snapshot_config_path is not None:
+            if not backup.snapshot_config_path.exists():
+                raise FileNotFoundError(
+                    f"Backup config snapshot does not exist: {backup.snapshot_config_path}"
+                )
+            backup.config_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(backup.snapshot_config_path, backup.config_path)
+        elif backup.config_path.exists():
+            # The config was tracked but did not exist when the backup was
+            # taken; a file present now was created by the failed run and must
+            # go away with the rollback.
+            backup.config_path.unlink()
 
 
 def list_backups(backup_parent: Path) -> list[BackupSnapshot]:
@@ -87,11 +132,22 @@ def list_backups(backup_parent: Path) -> list[BackupSnapshot]:
 def load_backup(root: Path) -> BackupSnapshot:
     manifest_path = root / "backup-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # The backup directory may have been moved since creation; prefer the
+    # snapshot that actually sits next to the manifest over the recorded
+    # absolute path.
+    local_snapshot = root / "claude-code-sessions"
+    snapshot_root = local_snapshot if local_snapshot.exists() else Path(manifest["snapshot_root"])
+    snapshot_config_path = None
+    if manifest.get("snapshot_config_path"):
+        recorded = Path(manifest["snapshot_config_path"])
+        local_config = root / recorded.name
+        snapshot_config_path = local_config if local_config.exists() else recorded
     return BackupSnapshot(
         root=root,
         sessions_root=Path(manifest["sessions_root"]),
-        snapshot_root=Path(manifest["snapshot_root"]),
+        snapshot_root=snapshot_root,
         manifest_path=manifest_path,
         config_path=Path(manifest["config_path"]) if manifest.get("config_path") else None,
-        snapshot_config_path=Path(manifest["snapshot_config_path"]) if manifest.get("snapshot_config_path") else None,
+        snapshot_config_path=snapshot_config_path,
+        reason=str(manifest.get("reason") or ""),
     )

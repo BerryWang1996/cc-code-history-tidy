@@ -66,7 +66,7 @@ def save_code_group_layout_to_desktop_config(
     assignments: dict[str, str],
     order_data: dict[str, list[str]],
 ) -> None:
-    data = _read_desktop_config(config_path)
+    data = _read_desktop_config_strict(config_path)
     preferences = _ensure_dict(data, "preferences")
     epitaxy_prefs = _ensure_dict(preferences, "epitaxyPrefs")
     slice_data = _ensure_dict(epitaxy_prefs, "dframe-local-slice")
@@ -87,10 +87,7 @@ def save_code_group_layout_to_desktop_config(
         cleaned_order[group_id] = list(session_keys)
     slice_data["customGroupOrder"] = cleaned_order
 
-    config_path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _atomic_write_json(config_path, data)
 
 
 def _merge_slices(desktop_slice: dict[str, object], local_storage_slice: dict[str, object]) -> dict[str, object]:
@@ -126,6 +123,30 @@ def _read_desktop_config(config_path: Path) -> dict[str, object]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _read_desktop_config_strict(config_path: Path) -> dict[str, object]:
+    """Read the desktop config for a rewrite.
+
+    Unlike the scan-path reader, a config file that exists but cannot be parsed
+    must abort the save: silently rebuilding from an empty dict would wipe every
+    other preference (MCP servers, etc.) stored in the same file.
+    """
+    if not config_path.exists():
+        return {}
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Claude desktop config is not a JSON object: {config_path}")
+    return data
+
+
+def _atomic_write_json(path: Path, data: dict[str, object]) -> None:
+    tmp_path = path.parent / f"{path.name}.tmp-write"
+    tmp_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
 
 
 def _read_desktop_slice(config_path: Path) -> dict[str, object]:
