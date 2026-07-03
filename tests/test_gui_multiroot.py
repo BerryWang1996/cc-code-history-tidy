@@ -83,7 +83,8 @@ def test_scan_of_multi_org_account_plans_no_moves(tmp_path):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
 
     window.load_environment(env)
 
@@ -108,8 +109,8 @@ def test_moving_session_between_same_account_roots_plans_move(tmp_path):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
-    window.mode_combo.setCurrentText("Move")
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
 
     account_items = [
@@ -165,8 +166,8 @@ def test_failed_cross_root_execute_rolls_back_every_root(tmp_path, monkeypatch):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
-    window.mode_combo.setCurrentText("Move")
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     gateway_account = _find_item_by_data(window.session_tree, gateway_account_uuid)
@@ -232,8 +233,8 @@ def test_layout_written_to_each_involved_root(tmp_path):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
-    window.mode_combo.setCurrentText("Move")
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     gateway_group = _find_item_by_data(window.session_tree, "cg-gateway")

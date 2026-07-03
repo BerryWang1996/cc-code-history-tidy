@@ -39,14 +39,14 @@ def test_copy_execute_keeps_original_grouping_and_writes_no_stale_target_entry(t
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
-    window.mode_combo.setCurrentText("Copy")
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     target_group = _find_item_by_data(window.session_tree, fixture.current_code_group_id)
-    source_session = source_group.child(0)
-    moved = source_group.takeChild(source_group.indexOfChild(source_session))
-    target_group.addChild(moved)
+    window.session_tree.setCurrentItem(source_group.child(0))
+    window.session_tree.copy_selected_sessions()
+    window.session_tree.paste_to(target_group)
 
     window.execute_plan()
 

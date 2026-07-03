@@ -172,7 +172,8 @@ def test_main_window_stages_session_move_without_writing(tmp_path):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     target_group = _find_item_by_data(window.session_tree, fixture.current_code_group_id)
@@ -200,8 +201,8 @@ def test_main_window_executes_staged_session_move(tmp_path):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
-    window.mode_combo.setCurrentText("Move")
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     target_group = _find_item_by_data(window.session_tree, fixture.current_code_group_id)
@@ -225,7 +226,7 @@ def test_main_window_executes_staged_session_move(tmp_path):
     ).exists()
 
 
-def test_main_window_defaults_to_copy_mode_for_cross_account_migration(tmp_path):
+def test_copy_paste_keeps_source_and_creates_copy(tmp_path):
     fixture = build_claude_fixture(tmp_path)
     env = discover_claude_environment(
         fixture.user_profile,
@@ -233,28 +234,30 @@ def test_main_window_defaults_to_copy_mode_for_cross_account_migration(tmp_path)
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     target_group = _find_item_by_data(window.session_tree, fixture.current_code_group_id)
-    source_session = source_group.child(0)
-    moved = source_group.takeChild(source_group.indexOfChild(source_session))
-    target_group.addChild(moved)
+    window.session_tree.setCurrentItem(source_group.child(0))
+    window.session_tree.copy_selected_sessions()
+    window.session_tree.paste_to(target_group)
 
     window.execute_plan()
 
-    assert (
-        fixture.sessions_root
-        / fixture.current_account_uuid
-        / fixture.current_group_id
-        / "session-source.json"
-    ).exists()
     assert (
         fixture.sessions_root
         / fixture.source_account_uuid
         / fixture.source_group_id
         / "session-source.json"
     ).exists()
+    target_dir = fixture.sessions_root / fixture.current_account_uuid / fixture.current_group_id
+    copied_ids = {
+        json.loads(path.read_text(encoding="utf-8"))["sessionId"]
+        for path in target_dir.glob("*.json")
+    }
+    assert "desktop-source" not in copied_ids
+    assert len(copied_ids - {"desktop-current", "desktop-ungrouped"}) == 1
 
 
 def test_main_window_copies_between_different_session_roots(tmp_path):
@@ -288,29 +291,30 @@ def test_main_window_copies_between_different_session_roots(tmp_path):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     gateway_account = _find_item_by_data(window.session_tree, gateway_account_uuid)
-    gateway_ungrouped = _direct_child_by_data(gateway_account, "ungrouped")
-    source_session = source_group.child(0)
-    moved = source_group.takeChild(source_group.indexOfChild(source_session))
-    gateway_ungrouped.addChild(moved)
+    window.session_tree.setCurrentItem(source_group.child(0))
+    window.session_tree.copy_selected_sessions()
+    window.session_tree.paste_to(gateway_account)
 
     window.execute_plan()
 
-    assert (
-        gateway_sessions_root
-        / gateway_account_uuid
-        / fixture.current_group_id
-        / "session-source.json"
-    ).exists()
+    # the source stays; a fresh-id copy lands in the gateway root
     assert (
         fixture.sessions_root
         / fixture.source_account_uuid
         / fixture.source_group_id
         / "session-source.json"
     ).exists()
+    gateway_ids = {
+        json.loads(path.read_text(encoding="utf-8"))["sessionId"]
+        for path in (gateway_sessions_root / gateway_account_uuid).rglob("*.json")
+    }
+    assert "desktop-source" not in gateway_ids
+    assert len(gateway_ids - {"gateway-session"}) == 1
 
 
 def test_execute_rolls_back_files_when_config_write_fails(tmp_path, monkeypatch):
@@ -321,8 +325,8 @@ def test_execute_rolls_back_files_when_config_write_fails(tmp_path, monkeypatch)
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
-    window.mode_combo.setCurrentText("Move")
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
     target_group = _find_item_by_data(window.session_tree, fixture.current_code_group_id)
@@ -362,7 +366,8 @@ def test_main_window_executes_code_group_only_move_without_filesystem_move(tmp_p
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     ungrouped_group = _find_item_by_data(window.session_tree, "ungrouped")
     target_group = _find_item_by_data(window.session_tree, fixture.current_code_group_id)
@@ -393,7 +398,8 @@ def test_dry_run_reports_layout_only_changes(tmp_path):
         fixture.localappdata,
     )
     create_app([])
-    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False,
+        execute_confirmer=lambda summary: True)
     window.load_environment(env)
     ungrouped_group = _find_item_by_data(window.session_tree, "ungrouped")
     target_group = _find_item_by_data(window.session_tree, fixture.current_code_group_id)
@@ -403,8 +409,8 @@ def test_dry_run_reports_layout_only_changes(tmp_path):
 
     window.show_dry_run()
 
-    assert "0 file move(s)" in window.status_label.text()
-    assert "layout update: yes" in window.status_label.text()
+    assert "0 个移动, 0 个复制" in window.status_label.text()
+    assert "布局更新: yes" in window.status_label.text()
 
 
 def test_execute_button_disabled_when_claude_is_running(tmp_path):
