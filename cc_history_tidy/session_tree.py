@@ -19,8 +19,6 @@ UNDO_LIMIT = 50
 CUT_DIM_COLOR = QColor(150, 150, 150)
 MOVE_BADGE_COLOR = QColor(30, 100, 200)
 COPY_BADGE_COLOR = QColor(30, 140, 60)
-MOVE_BADGE_TEXT = "待移入"
-COPY_BADGE_TEXT = "⊕ 待复制"
 
 
 def format_activity_timestamp(epoch_ms: int | None) -> str:
@@ -340,7 +338,7 @@ class SessionTreeWidget(QTreeWidget):
                         or session.sessions_root != sessions_root
                     )
                     if staged_move:
-                        session_item.setText(1, MOVE_BADGE_TEXT)
+                        session_item.setText(1, tr("badge.move"))
                         session_item.setForeground(1, QBrush(MOVE_BADGE_COLOR))
                     else:
                         session_item.setText(1, format_activity_timestamp(session.last_activity_at))
@@ -563,7 +561,7 @@ class SessionTreeWidget(QTreeWidget):
             if child.data(0, Qt.ItemDataRole.UserRole) == UNGROUPED_CODE_GROUP_ID:
                 return child
         group_item = _new_code_group_item(
-            UNGROUPED_CODE_GROUP_LABEL,
+            tr("tree.ungrouped"),
             UNGROUPED_CODE_GROUP_ID,
             str(account_item.data(0, Qt.ItemDataRole.UserRole + 1) or ""),
         )
@@ -635,7 +633,7 @@ def build_ghost_group_marker(group_item: QTreeWidgetItem, staged_mode: str) -> N
 
 
 def _new_code_group_item(label: str, code_group_id: str, group_id: str) -> QTreeWidgetItem:
-    group_item = QTreeWidgetItem([label, "Code group"])
+    group_item = QTreeWidgetItem([label, tr("tree.group_type")])
     group_item.setData(0, Qt.ItemDataRole.UserRole, code_group_id)
     group_item.setData(0, Qt.ItemDataRole.UserRole + 1, group_id)
     group_item.setFlags(

@@ -92,7 +92,7 @@ def test_main_window_places_unassigned_sessions_under_ungrouped(tmp_path):
     window.load_environment(env)
 
     ungrouped_group = _find_item_by_data(window.session_tree, "ungrouped")
-    assert ungrouped_group.text(0) == "Ungrouped"
+    assert ungrouped_group.text(0) == "未分组"
     assert ungrouped_group.child(0).text(0) == "Ungrouped session"
 
 

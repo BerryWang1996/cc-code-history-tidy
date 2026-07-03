@@ -145,3 +145,68 @@ def test_ghost_copy_does_not_pollute_staged_layout(tmp_path):
     )
     slice_data = config["preferences"]["epitaxyPrefs"]["dframe-local-slice"]
     assert slice_data["customGroupAssignments"]["code:desktop-source"] == fixture.source_code_group_id
+
+
+def test_copied_session_lands_in_pasted_group_after_execute(tmp_path):
+    fixture, window = _load_window(tmp_path)
+    tree = window.session_tree
+    source_group = _find_item_by_data(tree, fixture.source_code_group_id)
+    target_group = _find_item_by_data(tree, fixture.current_code_group_id)
+    tree.setCurrentItem(source_group.child(0))
+    tree.copy_selected_sessions()
+    tree.paste_to(target_group)
+
+    window.execute_plan()
+
+    config = json.loads(
+        (fixture.sessions_root.parent / "claude_desktop_config.json").read_text(encoding="utf-8")
+    )
+    slice_data = config["preferences"]["epitaxyPrefs"]["dframe-local-slice"]
+    order = slice_data["customGroupOrder"][fixture.current_code_group_id]
+    new_keys = [key for key in order if key != "code:desktop-current"]
+    assert len(new_keys) == 1  # the copy's NEW id was assigned to the pasted group
+    assert slice_data["customGroupAssignments"][new_keys[0]] == fixture.current_code_group_id
+    # and it is not the old id
+    assert new_keys[0] != "code:desktop-source"
+
+
+def test_copied_group_lands_all_sessions_in_group_after_execute(tmp_path):
+    fixture, window = _load_window(tmp_path)
+    tree = window.session_tree
+    source_group = _find_item_by_data(tree, fixture.source_code_group_id)
+    current_account = _find_item_by_data(tree, fixture.current_account_uuid)
+    tree.setCurrentItem(source_group)
+    tree.copy_selected_sessions()
+    tree.paste_to(current_account)
+
+    window.execute_plan()
+
+    config = json.loads(
+        (fixture.sessions_root.parent / "claude_desktop_config.json").read_text(encoding="utf-8")
+    )
+    slice_data = config["preferences"]["epitaxyPrefs"]["dframe-local-slice"]
+    order = slice_data["customGroupOrder"][fixture.source_code_group_id]
+    # original assignment plus the fresh copy id
+    assert "code:desktop-source" in order
+    assert len(order) == 2
+    # the group label was persisted alongside
+    labels = {group["id"]: group["name"] for group in slice_data.get("customGroups", [])}
+    assert labels.get(fixture.source_code_group_id) == "Archive Code Group"
+
+
+def test_language_combo_switches_ui_and_persists(tmp_path):
+    fixture, window = _load_window(tmp_path, settings_path=tmp_path / "settings.json")
+    from cc_history_tidy import i18n
+
+    index = window.language_combo.findData("en")
+    window.language_combo.setCurrentIndex(index)
+
+    assert i18n.current_language() == "en"
+    assert window.scan_button.text() == i18n.LANGS["en"]["btn.scan"]
+    assert window.session_tree.headerItem().text(1) == i18n.LANGS["en"]["header.updated"]
+    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert saved["language"] == "en"
+
+    back = window.language_combo.findData("zh")
+    window.language_combo.setCurrentIndex(back)
+    assert i18n.current_language() == "zh"

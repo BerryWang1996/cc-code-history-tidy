@@ -9,6 +9,7 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cc_history_tidy import i18n
 from cc_history_tidy.account_config import (
     AccountLabelConfig,
     load_account_label_config,
@@ -31,9 +33,9 @@ from cc_history_tidy.account_config import (
 from cc_history_tidy.backup import BackupSnapshot, create_backup, list_backups, restore_backup
 from cc_history_tidy.code_groups import (
     UNGROUPED_CODE_GROUP_ID,
-    UNGROUPED_CODE_GROUP_LABEL,
     save_code_group_layout_to_desktop_config,
 )
+from cc_history_tidy.i18n import tr
 from cc_history_tidy.models import ClaudeSession, MigrationMode, ScannedAccount
 from cc_history_tidy.migrator import migrate_sessions
 from cc_history_tidy.paths import ClaudeEnvironment, discover_claude_environment
@@ -45,8 +47,9 @@ from cc_history_tidy.session_tree import (
     _new_code_group_item,
     build_account_item,
     build_session_item,
-    format_activity_timestamp,
 )
+
+SESSION_COUNT_ROLE = Qt.ItemDataRole.UserRole + 4
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
@@ -74,14 +77,19 @@ class MainWindow(QMainWindow):
         account_config_path: Path | None = None,
         process_checker: Callable[[], bool] = is_claude_desktop_running,
         execute_confirmer: Callable[[str], bool] | None = None,
+        settings_path: Path | None = None,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("CC Code History Tidy")
+        config_home = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".claude-desktop-migrator"
+        self.settings_path = settings_path or (config_home / "settings.json")
+        i18n.set_language(i18n.detect_default_language(self.settings_path))
+
+        self.setWindowTitle(tr("app.title"))
         self.resize(1120, 720)
 
-        self.status_label = QLabel("点击 扫描 载入 Claude Desktop Code 会话，然后用 复制/剪切/粘贴 或拖拽整理。")
+        self.status_label = QLabel(tr("app.initial_status"))
         self.session_tree = SessionTreeWidget()
-        self.session_tree.setHeaderLabels(["账户 / Code 分组 / 对话", "更新时间"])
+        self.session_tree.setHeaderLabels([tr("header.tree"), tr("header.updated")])
         self.session_tree.setColumnWidth(0, 620)
         self.session_tree.header().setStretchLastSection(True)
         self.session_tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
@@ -92,20 +100,36 @@ class MainWindow(QMainWindow):
         self.session_tree.setDefaultDropAction(Qt.DropAction.MoveAction)
 
         action_row = QHBoxLayout()
-        self.scan_button = QPushButton("扫描")
-        self.dry_run_button = QPushButton("预览")
-        self.execute_button = QPushButton("执行")
-        self.backups_button = QPushButton("备份")
+        self.scan_button = QPushButton(tr("btn.scan"))
+        self.dry_run_button = QPushButton(tr("btn.preview"))
+        self.execute_button = QPushButton(tr("btn.execute"))
+        self.undo_button = QPushButton(tr("btn.undo"))
+        self.redo_button = QPushButton(tr("btn.redo"))
+        self.reset_button = QPushButton(tr("btn.reset"))
+        self.backups_button = QPushButton(tr("btn.backups"))
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("中文", "zh")
+        self.language_combo.addItem("English", "en")
+        current_index = self.language_combo.findData(i18n.current_language())
+        self.language_combo.setCurrentIndex(max(current_index, 0))
         action_row.addWidget(self.scan_button)
         action_row.addWidget(self.dry_run_button)
         action_row.addWidget(self.execute_button)
+        action_row.addWidget(self.undo_button)
+        action_row.addWidget(self.redo_button)
+        action_row.addWidget(self.reset_button)
         action_row.addWidget(self.backups_button)
         action_row.addStretch(1)
+        action_row.addWidget(self.language_combo)
 
         self.scan_button.clicked.connect(self.scan_default_environment)
         self.dry_run_button.clicked.connect(self.show_dry_run)
         self.execute_button.clicked.connect(self.execute_plan)
+        self.undo_button.clicked.connect(self.session_tree.undo)
+        self.redo_button.clicked.connect(self.session_tree.redo)
+        self.reset_button.clicked.connect(self.reset_staged_changes)
         self.backups_button.clicked.connect(self.show_backups_dialog)
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
 
         layout = QVBoxLayout()
         layout.addWidget(self.status_label)
@@ -118,27 +142,21 @@ class MainWindow(QMainWindow):
         self.env: ClaudeEnvironment | None = None
         self.accounts: list[ScannedAccount] = []
         self._loaded_tree_signature: tuple[tuple[str, tuple[tuple[str, tuple[str, ...]], ...]], ...] = ()
-        self.backup_parent = backup_parent or (
-            Path(os.environ.get("USERPROFILE", str(Path.home())))
-            / ".claude-desktop-migrator"
-            / "backups"
-        )
-        self.account_config_path = account_config_path or (
-            Path(os.environ.get("USERPROFILE", str(Path.home())))
-            / ".claude-desktop-migrator"
-            / "account-groups.json"
-        )
+        self.backup_parent = backup_parent or (config_home / "backups")
+        self.account_config_path = account_config_path or (config_home / "account-groups.json")
         self.account_config: AccountLabelConfig = load_account_label_config(self.account_config_path)
         self.process_checker = process_checker
         self.execute_confirmer = execute_confirmer
         self.session_tree.statusMessage.connect(self.status_label.setText)
+        self.session_tree.treeChanged.connect(self._on_tree_changed)
         self.refresh_execute_state()
+        self._refresh_undo_buttons()
 
     def scan_default_environment(self) -> None:
         try:
             self.load_environment(discover_claude_environment())
         except Exception as exc:  # pragma: no cover - exercised manually
-            self.status_label.setText(f"扫描失败：{exc}")
+            self.status_label.setText(tr("status.scan_failed", exc=exc))
 
     def load_environment(self, env: ClaudeEnvironment) -> None:
         self.env = env
@@ -146,8 +164,13 @@ class MainWindow(QMainWindow):
         self._populate_trees()
         self._loaded_tree_signature = self.tree_signature()
         self.refresh_execute_state()
+        self._refresh_undo_buttons()
         self.status_label.setText(
-            f"已加载 {sum(len(account.sessions) for account in self.accounts)} 个会话（{env.sessions_root}）"
+            tr(
+                "status.loaded",
+                n=sum(len(account.sessions) for account in self.accounts),
+                root=env.sessions_root,
+            )
         )
 
     def show_dry_run(self) -> None:
@@ -158,11 +181,8 @@ class MainWindow(QMainWindow):
         copy_count = len(planned) - move_count
         layout_status = "yes" if has_tree_changes else "no"
         self.status_label.setText(
-            f"预览：{move_count} 个移动、{copy_count} 个复制；布局更新：{layout_status}。（未写入磁盘）"
+            tr("status.dry_run", moves=move_count, copies=copy_count, layout=layout_status)
         )
-
-    def show_not_implemented(self) -> None:
-        QMessageBox.information(self, "Not wired yet", "This action will be wired after core scanning.")
 
     def available_backups(self) -> list[BackupSnapshot]:
         return list_backups(self.backup_parent)
@@ -170,11 +190,11 @@ class MainWindow(QMainWindow):
     def show_backups_dialog(self) -> None:
         backups = self.available_backups()
         if not backups:
-            self.status_label.setText(f"在 {self.backup_parent} 未找到备份。")
+            self.status_label.setText(tr("status.no_backups", path=self.backup_parent))
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("备份")
+        dialog.setWindowTitle(tr("dlg.backups_title"))
         layout = QVBoxLayout()
         list_widget = QListWidget()
         for backup in backups:
@@ -185,7 +205,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(list_widget)
 
         buttons = QDialogButtonBox()
-        restore_button = buttons.addButton("恢复所选", QDialogButtonBox.ButtonRole.AcceptRole)
+        restore_button = buttons.addButton(
+            tr("dlg.restore_selected"), QDialogButtonBox.ButtonRole.AcceptRole
+        )
         buttons.addButton(QDialogButtonBox.StandardButton.Close)
         layout.addWidget(buttons)
         dialog.setLayout(layout)
@@ -200,22 +222,21 @@ class MainWindow(QMainWindow):
             if self.process_checker():
                 QMessageBox.warning(
                     dialog,
-                    "Claude 正在运行",
-                    "请先关闭 Claude Desktop / Claude Code Desktop 再恢复备份。",
+                    tr("dlg.claude_running_title"),
+                    tr("dlg.restore_running_body"),
                 )
                 return
             answer = QMessageBox.question(
                 dialog,
-                "恢复备份",
-                f"恢复备份 {backup.root.name}？\n\n"
-                f"这将替换以下目录的会话树：\n{backup.sessions_root}",
+                tr("dlg.restore_title"),
+                tr("dlg.restore_body", name=backup.root.name, path=backup.sessions_root),
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
             restore_backup(backup)
             if self.env is not None:
                 self.load_environment(self.env)
-            self.status_label.setText(f"已恢复备份 {backup.root.name}。")
+            self.status_label.setText(tr("status.restored", name=backup.root.name))
             dialog.accept()
 
         restore_button.clicked.connect(restore_selected)
@@ -225,27 +246,84 @@ class MainWindow(QMainWindow):
     def refresh_execute_state(self) -> None:
         if self.process_checker():
             self.execute_button.setEnabled(False)
-            self.execute_button.setToolTip(
-                "请先关闭 Claude Desktop / Claude Code Desktop 再执行。"
-                "注意：Claude Code CLI 也以 claude.exe 运行，会触发此检查。"
-            )
+            self.execute_button.setToolTip(tr("tooltip.execute_disabled"))
         else:
             self.execute_button.setEnabled(True)
-            self.execute_button.setToolTip("执行暂存的变更（会先弹出确认框）。")
+            self.execute_button.setToolTip(tr("tooltip.execute_enabled"))
+
+    def _refresh_undo_buttons(self) -> None:
+        self.undo_button.setEnabled(bool(self.session_tree.undo_stack))
+        self.redo_button.setEnabled(bool(self.session_tree.redo_stack))
+
+    def _on_tree_changed(self) -> None:
+        self._refresh_undo_buttons()
+        planned = self.planned_session_moves()
+        has_tree_changes = self.tree_signature() != self._loaded_tree_signature
+        if planned or has_tree_changes:
+            move_count = sum(1 for move in planned if move.mode == MigrationMode.MOVE)
+            copy_count = len(planned) - move_count
+            self.status_label.setText(
+                tr("status.staged_summary", moves=move_count, copies=copy_count)
+            )
+
+    def _on_language_changed(self) -> None:
+        code = self.language_combo.currentData()
+        if not isinstance(code, str) or code == i18n.current_language():
+            return
+        i18n.set_language(code)
+        try:
+            i18n.save_language(code, self.settings_path)
+        except OSError:  # pragma: no cover - settings dir not writable
+            pass
+        self.retranslate_ui()
+
+    def retranslate_ui(self) -> None:
+        self.setWindowTitle(tr("app.title"))
+        self.scan_button.setText(tr("btn.scan"))
+        self.dry_run_button.setText(tr("btn.preview"))
+        self.execute_button.setText(tr("btn.execute"))
+        self.undo_button.setText(tr("btn.undo"))
+        self.redo_button.setText(tr("btn.redo"))
+        self.reset_button.setText(tr("btn.reset"))
+        self.backups_button.setText(tr("btn.backups"))
+        self.session_tree.setHeaderLabels([tr("header.tree"), tr("header.updated")])
+        self.refresh_execute_state()
+        tree = self.session_tree
+        for account_index in range(tree.topLevelItemCount()):
+            account_item = tree.topLevelItem(account_index)
+            count = account_item.data(0, SESSION_COUNT_ROLE)
+            if isinstance(count, int):
+                account_item.setText(1, tr("tree.sessions_count", n=count))
+            for group_index in range(account_item.childCount()):
+                group_item = account_item.child(group_index)
+                if group_item.data(0, Qt.ItemDataRole.UserRole) == UNGROUPED_CODE_GROUP_ID:
+                    group_item.setText(0, tr("tree.ungrouped"))
+                if tree.is_ghost_item(group_item):
+                    group_item.setText(1, tr("badge.copy"))
+                elif tree.item_kind(group_item) == "group":
+                    group_item.setText(1, tr("tree.group_type"))
+                for session_index in range(group_item.childCount()):
+                    session_item = group_item.child(session_index)
+                    if tree.is_ghost_item(session_item):
+                        session_item.setText(1, tr("badge.copy"))
+        tree.refresh_staged_markers()
+        self.status_label.setText(tr("status.language_changed"))
 
     def execute_plan(self) -> None:
         self.refresh_execute_state()
         if self.process_checker():
-            self.status_label.setText("请先关闭 Claude Desktop。")
-            QMessageBox.warning(self, "Claude 正在运行", "请先关闭 Claude Desktop 再执行迁移。")
+            self.status_label.setText(tr("status.close_claude_first"))
+            QMessageBox.warning(
+                self, tr("dlg.claude_running_title"), tr("dlg.claude_running_body")
+            )
             return
         if self.env is None:
-            self.status_label.setText("请先扫描。")
+            self.status_label.setText(tr("status.scan_first"))
             return
         planned = self.planned_session_moves()
         has_tree_changes = self.tree_signature() != self._loaded_tree_signature
         if not planned and not has_tree_changes:
-            self.status_label.setText("没有暂存的修改。")
+            self.status_label.setText(tr("status.no_staged"))
             return
         copied = 0
         removed = 0
@@ -254,10 +332,11 @@ class MainWindow(QMainWindow):
         if not self._confirm_execution(
             self._execution_summary(move_count, copy_count, has_tree_changes)
         ):
-            self.status_label.setText("已取消，未做任何更改。")
+            self.status_label.setText(tr("status.cancelled"))
             return
 
         visible_keys, layout_by_root = self.staged_code_group_layout_by_root()
+        labels_by_root = self._group_labels_by_root()
 
         # Every root that is read from or written to during this execution gets
         # its own backup so a failure can roll back all of them, not just the
@@ -279,10 +358,12 @@ class MainWindow(QMainWindow):
                     config_path=root.parent / "claude_desktop_config.json",
                 )
         except Exception as exc:
-            self.status_label.setText(f"备份失败，执行已取消：{exc}")
+            self.status_label.setText(tr("status.backup_failed", exc=exc))
             return
 
-        by_move_target: dict[tuple[MigrationMode, Path, Path, str, str, str], list[ClaudeSession]] = {}
+        by_move_target: dict[
+            tuple[MigrationMode, Path, Path, str, str, str], list[PlannedSessionMove]
+        ] = {}
         for move in planned:
             key = (
                 move.mode,
@@ -292,7 +373,7 @@ class MainWindow(QMainWindow):
                 move.target_account_uuid,
                 move.target_group_id,
             )
-            by_move_target.setdefault(key, []).append(move.session)
+            by_move_target.setdefault(key, []).append(move)
 
         # COPY batches run before MOVE batches so a session that is both copied
         # and moved in one execute is copied from its original location first.
@@ -308,12 +389,12 @@ class MainWindow(QMainWindow):
                 source_account_uuid,
                 target_account_uuid,
                 target_group_id,
-            ), sessions in ordered_batches:
+            ), batch_moves in ordered_batches:
                 result = migrate_sessions(
                     sessions_root=source_sessions_root,
                     source_account_uuid=source_account_uuid,
                     target_account_uuid=target_account_uuid,
-                    session_files=[session.metadata_path for session in sessions],
+                    session_files=[move.session.metadata_path for move in batch_moves],
                     mode=batch_mode,
                     backup_root=self.backup_parent,
                     target_group_id=target_group_id,
@@ -323,14 +404,30 @@ class MainWindow(QMainWindow):
                 )
                 copied += len(result.copied)
                 removed += len(result.removed)
+                if batch_mode == MigrationMode.COPY and len(result.session_id_mapping) == len(
+                    batch_moves
+                ):
+                    # Copies get fresh sessionIds; assign each new id to the
+                    # code group the ghost was pasted into so the copy shows up
+                    # grouped after the next Claude Desktop launch.
+                    for move, (_old_id, new_id) in zip(batch_moves, result.session_id_mapping):
+                        if move.target_code_group_id == UNGROUPED_CODE_GROUP_ID:
+                            continue
+                        assignments, order_data = layout_by_root.setdefault(
+                            move.target_sessions_root, ({}, {})
+                        )
+                        session_key = f"code:{new_id}"
+                        assignments[session_key] = move.target_code_group_id
+                        order_data.setdefault(move.target_code_group_id, []).append(session_key)
 
-            if has_tree_changes:
+            if has_tree_changes or copy_count:
                 for root, (assignments, order_data) in layout_by_root.items():
                     save_code_group_layout_to_desktop_config(
                         root.parent / "claude_desktop_config.json",
                         visible_keys,
                         assignments,
                         order_data,
+                        group_labels=labels_by_root.get(root),
                     )
         except Exception as exc:
             restore_errors: list[str] = []
@@ -342,32 +439,37 @@ class MainWindow(QMainWindow):
             self.load_environment(self.env)
             if restore_errors:
                 self.status_label.setText(
-                    f"执行失败：{exc}。有 {len(restore_errors)} 个目录回滚失败（{'; '.join(restore_errors)}），"
-                    f"请从 {self.backup_parent} 手动恢复。"
+                    tr(
+                        "status.exec_failed_partial",
+                        exc=exc,
+                        n=len(restore_errors),
+                        details="; ".join(restore_errors),
+                        path=self.backup_parent,
+                    )
                 )
             else:
-                self.status_label.setText(f"执行失败，已全部回滚：{exc}")
+                self.status_label.setText(tr("status.exec_failed_rolled_back", exc=exc))
             return
 
         self.load_environment(self.env)
-        self.status_label.setText(f"执行完成：写入 {copied} 个文件，移除 {removed} 个源文件。")
+        self.status_label.setText(tr("status.executed", copied=copied, removed=removed))
 
     def _confirm_execution(self, summary: str) -> bool:
         if self.execute_confirmer is not None:
             return self.execute_confirmer(summary)
-        answer = QMessageBox.question(self, "确认执行", summary)
+        answer = QMessageBox.question(self, tr("dlg.confirm_title"), summary)
         return answer == QMessageBox.StandardButton.Yes
 
     @staticmethod
     def _execution_summary(move_count: int, copy_count: int, layout_changed: bool) -> str:
         parts = []
         if move_count:
-            parts.append(f"移动 {move_count} 个对话")
+            parts.append(tr("dlg.summary_move", n=move_count))
         if copy_count:
-            parts.append(f"创建 {copy_count} 个副本")
+            parts.append(tr("dlg.summary_copy", n=copy_count))
         if layout_changed:
-            parts.append("更新分组布局")
-        return "将" + "、".join(parts) + "。执行前会自动备份所有涉及的目录。继续？"
+            parts.append(tr("dlg.summary_layout"))
+        return tr("dlg.summary_head") + tr("dlg.summary_join").join(parts) + tr("dlg.summary_tail")
 
     def planned_session_moves(self) -> list[PlannedSessionMove]:
         moves: list[PlannedSessionMove] = []
@@ -481,6 +583,24 @@ class MainWindow(QMainWindow):
                     order_data.setdefault(code_group_id, []).append(session_key)
         return visible_keys, by_root
 
+    def _group_labels_by_root(self) -> dict[Path, dict[str, str]]:
+        labels_by_root: dict[Path, dict[str, str]] = {}
+        for account_index in range(self.session_tree.topLevelItemCount()):
+            account_item = self.session_tree.topLevelItem(account_index)
+            sessions_root = account_item.data(0, Qt.ItemDataRole.UserRole + 2)
+            if not isinstance(sessions_root, Path):
+                continue
+            labels = labels_by_root.setdefault(sessions_root, {})
+            for group_index in range(account_item.childCount()):
+                group_item = account_item.child(group_index)
+                code_group_id = group_item.data(0, Qt.ItemDataRole.UserRole)
+                if not isinstance(code_group_id, str) or code_group_id == UNGROUPED_CODE_GROUP_ID:
+                    continue
+                label = group_item.text(0).strip()
+                if label:
+                    labels[code_group_id] = label
+        return labels_by_root
+
     def _target_filesystem_group_id(
         self,
         account_item: QTreeWidgetItem,
@@ -500,7 +620,8 @@ class MainWindow(QMainWindow):
     def reset_staged_changes(self) -> None:
         self._populate_trees()
         self.refresh_execute_state()
-        self.status_label.setText("已恢复到扫描后的初始状态。")
+        self._refresh_undo_buttons()
+        self.status_label.setText(tr("status.reset_done"))
 
     def _populate_trees(self) -> None:
         self.session_tree.clear_clipboard()
@@ -520,18 +641,24 @@ class MainWindow(QMainWindow):
                 label = f"{label} [{account.partition.root.parent.parent.name}]"
             account_item = build_account_item(
                 label,
-                f"{len(account.sessions)} session(s)",
+                tr("tree.sessions_count", n=len(account.sessions)),
                 account.partition.account_uuid,
                 _default_group_id(account.sessions),
                 account.partition.root.parent,
             )
+            account_item.setData(0, SESSION_COUNT_ROLE, len(account.sessions))
             self.session_tree.addTopLevelItem(account_item)
             code_group_items: dict[str, QTreeWidgetItem] = {}
             for session in account.sessions:
                 group_item = code_group_items.get(session.code_group_id)
                 if group_item is None:
+                    group_label = (
+                        tr("tree.ungrouped")
+                        if session.code_group_id == UNGROUPED_CODE_GROUP_ID
+                        else session.code_group_label
+                    )
                     group_item = _new_code_group_item(
-                        session.code_group_label,
+                        group_label,
                         session.code_group_id,
                         session.group_id,
                     )
@@ -541,13 +668,14 @@ class MainWindow(QMainWindow):
                 group_item.addChild(build_session_item(session))
             if UNGROUPED_CODE_GROUP_ID not in code_group_items:
                 ungrouped_item = _new_code_group_item(
-                    UNGROUPED_CODE_GROUP_LABEL,
+                    tr("tree.ungrouped"),
                     UNGROUPED_CODE_GROUP_ID,
                     _default_group_id(account.sessions),
                 )
                 account_item.addChild(ungrouped_item)
                 ungrouped_item.setExpanded(True)
             account_item.setExpanded(True)
+        self._refresh_undo_buttons()
 
 
 def run_app(argv: list[str] | None = None) -> int:
