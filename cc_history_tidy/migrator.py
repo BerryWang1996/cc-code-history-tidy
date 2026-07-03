@@ -40,7 +40,7 @@ def migrate_sessions(
 
     rewrite_ids = mode == MigrationMode.COPY
     copy_pairs = _build_copy_pairs(source_root, target_root, session_files, target_group_id, rewrite_ids)
-    conflicts = [target for _, target, _ in copy_pairs if target.exists()]
+    conflicts = [target for _, target, _, _ in copy_pairs if target.exists()]
     if conflicts:
         raise MigrationConflictError(f"Target metadata already exists: {conflicts[0]}")
     if mode == MigrationMode.MOVE:
@@ -57,26 +57,30 @@ def migrate_sessions(
     target_root.mkdir(parents=True, exist_ok=True)
     copied: list[Path] = []
     removed: list[Path] = []
+    id_mapping: list[tuple[str, str]] = []
 
-    for source, target, new_session_id in copy_pairs:
+    for source, target, new_session_id, old_session_id in copy_pairs:
         target.parent.mkdir(parents=True, exist_ok=True)
         if new_session_id is None:
             shutil.copy2(source, target)
         else:
             _copy_with_new_session_id(source, target, new_session_id)
+            if old_session_id:
+                id_mapping.append((old_session_id, new_session_id))
         _verify_copied_metadata(source, target, new_session_id)
         copied.append(target)
 
     if mode == MigrationMode.MOVE:
-        for source, _, _ in copy_pairs:
+        for source, _, _, _ in copy_pairs:
             source.unlink()
             removed.append(source)
-        _prune_empty_dirs({source.parent for source, _, _ in copy_pairs}, stop_at=sessions_root)
+        _prune_empty_dirs({source.parent for source, _, _, _ in copy_pairs}, stop_at=sessions_root)
 
     return MigrationResult(
         copied=tuple(copied),
         removed=tuple(removed),
         backup_root=backup.root,
+        session_id_mapping=tuple(id_mapping),
     )
 
 
@@ -86,8 +90,8 @@ def _build_copy_pairs(
     session_files: list[Path],
     target_group_id: str,
     rewrite_ids: bool,
-) -> list[tuple[Path, Path, str | None]]:
-    pairs: list[tuple[Path, Path, str | None]] = []
+) -> list[tuple[Path, Path, str | None, str | None]]:
+    pairs: list[tuple[Path, Path, str | None, str | None]] = []
     seen_targets: set[Path] = set()
     for raw_source in session_files:
         source = Path(raw_source)
@@ -115,7 +119,7 @@ def _build_copy_pairs(
                 f"Two selected sessions map to the same target file: {target}"
             )
         seen_targets.add(target)
-        pairs.append((source, target, new_session_id))
+        pairs.append((source, target, new_session_id, source_session_id))
     return pairs
 
 
@@ -128,17 +132,16 @@ def _new_session_id_for(source_session_id: str) -> str:
 
 
 def _ensure_no_duplicate_session_ids(
-    copy_pairs: list[tuple[Path, Path, str | None]],
+    copy_pairs: list[tuple[Path, Path, str | None, str | None]],
     target_sessions_root: Path,
 ) -> None:
     moving_ids = {}
-    for source, _, _ in copy_pairs:
-        session_id, _ = _read_metadata_identity(source)
-        if session_id:
-            moving_ids[session_id] = source
+    for source, _, _, old_session_id in copy_pairs:
+        if old_session_id:
+            moving_ids[old_session_id] = source
     if not moving_ids or not target_sessions_root.exists():
         return
-    moving_sources = {source for source, _, _ in copy_pairs}
+    moving_sources = {source for source, _, _, _ in copy_pairs}
     for metadata_path in target_sessions_root.rglob("*.json"):
         if metadata_path in moving_sources:
             continue

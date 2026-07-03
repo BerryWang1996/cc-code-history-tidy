@@ -250,3 +250,50 @@ def test_move_migration_prunes_empty_source_dirs(tmp_path):
     assert not source_group_dir.exists()
     assert not (fixture.sessions_root / fixture.source_account_uuid).exists()
     assert fixture.sessions_root.exists()
+
+
+def test_copy_migration_reports_id_mapping(tmp_path):
+    fixture = build_claude_fixture(tmp_path)
+    source_file = (
+        fixture.sessions_root
+        / fixture.source_account_uuid
+        / fixture.source_group_id
+        / "session-source.json"
+    )
+
+    result = migrate_sessions(
+        sessions_root=fixture.sessions_root,
+        source_account_uuid=fixture.source_account_uuid,
+        target_account_uuid=fixture.current_account_uuid,
+        session_files=[source_file],
+        mode=MigrationMode.COPY,
+        backup_root=tmp_path / "backups",
+        target_group_id=fixture.current_group_id,
+    )
+
+    assert len(result.session_id_mapping) == 1
+    old_id, new_id = result.session_id_mapping[0]
+    assert old_id == "desktop-source"
+    assert new_id != old_id
+
+
+def test_move_migration_reports_empty_mapping(tmp_path):
+    fixture = build_claude_fixture(tmp_path)
+    source_file = (
+        fixture.sessions_root
+        / fixture.source_account_uuid
+        / fixture.source_group_id
+        / "session-source.json"
+    )
+
+    result = migrate_sessions(
+        sessions_root=fixture.sessions_root,
+        source_account_uuid=fixture.source_account_uuid,
+        target_account_uuid=fixture.current_account_uuid,
+        session_files=[source_file],
+        mode=MigrationMode.MOVE,
+        backup_root=tmp_path / "backups",
+        target_group_id=fixture.current_group_id,
+    )
+
+    assert result.session_id_mapping == ()

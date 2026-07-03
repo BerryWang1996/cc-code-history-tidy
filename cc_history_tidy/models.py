@@ -73,3 +73,5 @@ class MigrationResult:
     copied: tuple[Path, ...]
     removed: tuple[Path, ...]
     backup_root: Path
+    # (old sessionId, new sessionId) for COPY migrations; empty for MOVE.
+    session_id_mapping: tuple[tuple[str, str], ...] = ()
