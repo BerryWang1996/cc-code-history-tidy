@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+from PySide6.QtGui import QBrush, QColor, QKeySequence
+from PySide6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
 
 from cc_history_tidy.code_groups import (
     UNGROUPED_CODE_GROUP_ID,
@@ -169,6 +169,53 @@ class SessionTreeWidget(QTreeWidget):
                         session_item.setText(1, str(session.last_activity_at or ""))
                         if session_item not in self.clipboard_items:
                             session_item.setForeground(1, QBrush())
+
+    def _context_actions_for(self, item: QTreeWidgetItem):
+        kind = self.item_kind(item)
+        if kind == "session" and self.is_ghost_item(item):
+            return [("撤销此暂存副本", lambda checked=False, it=item: self.remove_ghost_item(it))]
+        actions = []
+        if kind == "session":
+            actions.append(("复制\tCtrl+C", lambda checked=False: self.copy_selected_sessions()))
+            actions.append(("剪切\tCtrl+X", lambda checked=False: self.cut_selected_sessions()))
+        if (
+            kind in {"group", "account", "session"}
+            and self.clipboard_mode is not None
+            and self.clipboard_items
+        ):
+            actions.append(("粘贴\tCtrl+V", lambda checked=False, it=item: self.paste_to(it)))
+        return actions
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt override
+        item = self.itemAt(event.pos())
+        if item is None:
+            return
+        if item not in self.selectedItems():
+            self.setCurrentItem(item)
+        actions = self._context_actions_for(item)
+        if not actions:
+            return
+        menu = QMenu(self)
+        for label, handler in actions:
+            menu.addAction(label).triggered.connect(handler)
+        menu.exec(event.globalPos())
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt override
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy_selected_sessions()
+            return
+        if event.matches(QKeySequence.StandardKey.Cut):
+            self.cut_selected_sessions()
+            return
+        if event.matches(QKeySequence.StandardKey.Paste):
+            if self.currentItem() is not None:
+                self.paste_to(self.currentItem())
+            return
+        if event.key() == Qt.Key.Key_Escape and self.clipboard_items:
+            self.clear_clipboard()
+            self.statusMessage.emit("已清空剪贴板。")
+            return
+        super().keyPressEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt override
         moving_items = self._selected_movable_items()

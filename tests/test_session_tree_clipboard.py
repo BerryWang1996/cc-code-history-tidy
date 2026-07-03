@@ -204,3 +204,75 @@ def test_remove_ghost_item_undoes_staged_copy(tmp_path):
         not tree.is_ghost_item(target_group.child(i))
         for i in range(target_group.childCount())
     )
+
+
+def test_context_actions_for_session_offer_copy_cut(tmp_path):
+    fixture, window = _load_window(tmp_path)
+    tree = window.session_tree
+    group = _find_item_by_data(tree, fixture.source_code_group_id)
+    labels = [label for label, _ in tree._context_actions_for(group.child(0))]
+    assert any("复制" in label for label in labels)
+    assert any("剪切" in label for label in labels)
+    assert not any("粘贴" in label for label in labels)  # clipboard empty
+
+
+def test_context_actions_offer_paste_when_clipboard_full(tmp_path):
+    fixture, window = _load_window(tmp_path)
+    tree = window.session_tree
+    group = _find_item_by_data(tree, fixture.source_code_group_id)
+    tree.setCurrentItem(group.child(0))
+    tree.copy_selected_sessions()
+    target_group = _find_item_by_data(tree, fixture.current_code_group_id)
+    labels = [label for label, _ in tree._context_actions_for(target_group)]
+    assert any("粘贴" in label for label in labels)
+
+
+def test_context_actions_for_ghost_offer_undo_only(tmp_path):
+    fixture, window = _load_window(tmp_path)
+    tree = window.session_tree
+    source_group = _find_item_by_data(tree, fixture.source_code_group_id)
+    target_group = _find_item_by_data(tree, fixture.current_code_group_id)
+    tree.setCurrentItem(source_group.child(0))
+    tree.copy_selected_sessions()
+    tree.paste_to(target_group)
+    ghost = next(
+        target_group.child(i)
+        for i in range(target_group.childCount())
+        if tree.is_ghost_item(target_group.child(i))
+    )
+    labels = [label for label, _ in tree._context_actions_for(ghost)]
+    assert labels == ["撤销此暂存副本"]
+
+
+def test_ctrl_shortcuts_drive_clipboard(tmp_path):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    fixture, window = _load_window(tmp_path)
+    tree = window.session_tree
+    source_group = _find_item_by_data(tree, fixture.source_code_group_id)
+    target_group = _find_item_by_data(tree, fixture.current_code_group_id)
+    session_item = source_group.child(0)
+    tree.setCurrentItem(session_item)
+
+    tree.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
+    )
+    assert tree.clipboard_mode == MigrationMode.MOVE
+
+    tree.setCurrentItem(target_group)
+    tree.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+    )
+    assert session_item.parent() is target_group
+
+    tree.setCurrentItem(session_item)
+    tree.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    )
+    assert tree.clipboard_mode == MigrationMode.COPY
+
+    tree.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    )
+    assert tree.clipboard_mode is None
