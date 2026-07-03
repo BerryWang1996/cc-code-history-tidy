@@ -29,7 +29,7 @@ def discover_claude_environment(
     claude_config = user_profile / ".claude.json"
     current_account_uuid = _read_current_account_uuid(claude_config)
     transcript_root = user_profile / ".claude" / "projects"
-    sessions_root = _select_sessions_root(
+    sessions_root, current_account_uuid = _select_sessions_root(
         _candidate_sessions_roots(appdata, localappdata),
         current_account_uuid,
     )
@@ -76,12 +76,34 @@ def _candidate_sessions_roots(appdata: Path, localappdata: Path) -> list[Path]:
     return roots
 
 
-def _select_sessions_root(candidates: list[Path], current_account_uuid: str) -> Path:
+def _read_root_current_account_uuid(claude_root: Path) -> str | None:
+    config_path = claude_root / "config.json"
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    account_uuid = data.get("lastKnownAccountUuid")
+    return account_uuid if isinstance(account_uuid, str) and account_uuid else None
+
+
+def _select_sessions_root(candidates: list[Path], current_account_uuid: str) -> tuple[Path, str]:
     if not candidates:
         raise FileNotFoundError("No claude-code-sessions directory found")
+    root_account_candidates = []
+    for root in candidates:
+        root_account_uuid = _read_root_current_account_uuid(root.parent)
+        if root_account_uuid and (root / root_account_uuid).exists():
+            root_account_candidates.append((root, root_account_uuid))
+    if root_account_candidates:
+        return max(root_account_candidates, key=lambda item: item[0].stat().st_mtime)
+
     containing_current = [
         root for root in candidates if (root / current_account_uuid).exists()
     ]
     if containing_current:
-        return max(containing_current, key=lambda path: path.stat().st_mtime)
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+        return max(containing_current, key=lambda path: path.stat().st_mtime), current_account_uuid
+    selected = max(candidates, key=lambda path: path.stat().st_mtime)
+    account_dirs = [path for path in selected.iterdir() if path.is_dir()]
+    if len(account_dirs) == 1:
+        return selected, account_dirs[0].name
+    return selected, current_account_uuid
