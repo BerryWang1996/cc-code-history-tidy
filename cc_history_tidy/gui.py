@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QComboBox,
     QPushButton,
     QTreeWidgetItem,
     QTreeWidget,
@@ -40,7 +39,11 @@ from cc_history_tidy.migrator import migrate_sessions
 from cc_history_tidy.paths import ClaudeEnvironment, discover_claude_environment
 from cc_history_tidy.processes import is_claude_desktop_running
 from cc_history_tidy.scanner import scan_accounts
-from cc_history_tidy.session_tree import SessionTreeWidget, _new_code_group_item
+from cc_history_tidy.session_tree import (
+    STAGED_MODE_ROLE,
+    SessionTreeWidget,
+    _new_code_group_item,
+)
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
@@ -58,6 +61,7 @@ class PlannedSessionMove:
     target_account_uuid: str
     target_group_id: str
     target_code_group_id: str
+    mode: MigrationMode
 
 
 class MainWindow(QMainWindow):
@@ -66,6 +70,7 @@ class MainWindow(QMainWindow):
         backup_parent: Path | None = None,
         account_config_path: Path | None = None,
         process_checker: Callable[[], bool] = is_claude_desktop_running,
+        execute_confirmer: Callable[[str], bool] | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("CC Code History Tidy")
@@ -83,14 +88,10 @@ class MainWindow(QMainWindow):
 
         action_row = QHBoxLayout()
         self.scan_button = QPushButton("Scan")
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Copy", MigrationMode.COPY)
-        self.mode_combo.addItem("Move", MigrationMode.MOVE)
         self.dry_run_button = QPushButton("Dry-run")
         self.execute_button = QPushButton("Execute")
         self.backups_button = QPushButton("Backups")
         action_row.addWidget(self.scan_button)
-        action_row.addWidget(self.mode_combo)
         action_row.addWidget(self.dry_run_button)
         action_row.addWidget(self.execute_button)
         action_row.addWidget(self.backups_button)
@@ -124,6 +125,8 @@ class MainWindow(QMainWindow):
         )
         self.account_config: AccountLabelConfig = load_account_label_config(self.account_config_path)
         self.process_checker = process_checker
+        self.execute_confirmer = execute_confirmer
+        self.session_tree.statusMessage.connect(self.status_label.setText)
         self.refresh_execute_state()
 
     def scan_default_environment(self) -> None:
@@ -147,8 +150,12 @@ class MainWindow(QMainWindow):
         self.refresh_execute_state()
         planned = self.planned_session_moves()
         has_tree_changes = self.tree_signature() != self._loaded_tree_signature
+        move_count = sum(1 for move in planned if move.mode == MigrationMode.MOVE)
+        copy_count = len(planned) - move_count
         layout_status = "yes" if has_tree_changes else "no"
-        self.status_label.setText(f"Dry-run: {len(planned)} file move(s); layout update: {layout_status}.")
+        self.status_label.setText(
+            f"Dry-run: {move_count} 个移动, {copy_count} 个复制; 布局更新: {layout_status}."
+        )
 
     def show_not_implemented(self) -> None:
         QMessageBox.information(self, "Not wired yet", "This action will be wired after core scanning.")
@@ -238,21 +245,15 @@ class MainWindow(QMainWindow):
             return
         copied = 0
         removed = 0
-        mode = self.selected_migration_mode()
+        move_count = sum(1 for move in planned if move.mode == MigrationMode.MOVE)
+        copy_count = len(planned) - move_count
+        if not self._confirm_execution(
+            self._execution_summary(move_count, copy_count, has_tree_changes)
+        ):
+            self.status_label.setText("已取消，未做任何更改。")
+            return
 
-        # In COPY mode the dragged session stays where it was and the duplicate
-        # is written with a fresh sessionId. The dragged tree item must not
-        # contribute to the staged layout: purging/reassigning the original's
-        # assignment or writing the old id into the target root's config would
-        # corrupt both configs.
-        excluded_session_ids = (
-            {move.session.session_id for move in planned}
-            if mode == MigrationMode.COPY
-            else set()
-        )
-        visible_keys, layout_by_root = self.staged_code_group_layout_by_root(
-            exclude_session_ids=excluded_session_ids
-        )
+        visible_keys, layout_by_root = self.staged_code_group_layout_by_root()
 
         # Every root that is read from or written to during this execution gets
         # its own backup so a failure can roll back all of them, not just the
@@ -277,9 +278,10 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"Backup failed; execution cancelled: {exc}")
             return
 
-        by_move_target: dict[tuple[Path, Path, str, str, str], list[ClaudeSession]] = {}
+        by_move_target: dict[tuple[MigrationMode, Path, Path, str, str, str], list[ClaudeSession]] = {}
         for move in planned:
             key = (
+                move.mode,
                 move.source_sessions_root,
                 move.target_sessions_root,
                 move.session.account_uuid,
@@ -288,20 +290,27 @@ class MainWindow(QMainWindow):
             )
             by_move_target.setdefault(key, []).append(move.session)
 
+        # COPY batches run before MOVE batches so a session that is both copied
+        # and moved in one execute is copied from its original location first.
+        ordered_batches = sorted(
+            by_move_target.items(),
+            key=lambda entry: 0 if entry[0][0] == MigrationMode.COPY else 1,
+        )
         try:
             for (
+                batch_mode,
                 source_sessions_root,
                 target_sessions_root,
                 source_account_uuid,
                 target_account_uuid,
                 target_group_id,
-            ), sessions in by_move_target.items():
+            ), sessions in ordered_batches:
                 result = migrate_sessions(
                     sessions_root=source_sessions_root,
                     source_account_uuid=source_account_uuid,
                     target_account_uuid=target_account_uuid,
                     session_files=[session.metadata_path for session in sessions],
-                    mode=mode,
+                    mode=batch_mode,
                     backup_root=self.backup_parent,
                     target_group_id=target_group_id,
                     config_path=target_sessions_root.parent / "claude_desktop_config.json",
@@ -339,14 +348,22 @@ class MainWindow(QMainWindow):
         self.load_environment(self.env)
         self.status_label.setText(f"Executed {copied} file move(s); removed {removed} source metadata file(s).")
 
-    def selected_migration_mode(self) -> MigrationMode:
-        mode = self.mode_combo.currentData()
-        if isinstance(mode, MigrationMode):
-            return mode
-        try:
-            return MigrationMode(str(mode))
-        except ValueError:
-            return MigrationMode.COPY
+    def _confirm_execution(self, summary: str) -> bool:
+        if self.execute_confirmer is not None:
+            return self.execute_confirmer(summary)
+        answer = QMessageBox.question(self, "确认执行", summary)
+        return answer == QMessageBox.StandardButton.Yes
+
+    @staticmethod
+    def _execution_summary(move_count: int, copy_count: int, layout_changed: bool) -> str:
+        parts = []
+        if move_count:
+            parts.append(f"移动 {move_count} 个对话")
+        if copy_count:
+            parts.append(f"创建 {copy_count} 个副本")
+        if layout_changed:
+            parts.append("更新分组布局")
+        return "将" + "、".join(parts) + "。执行前会自动备份所有涉及的目录。继续？"
 
     def planned_session_moves(self) -> list[PlannedSessionMove]:
         moves: list[PlannedSessionMove] = []
@@ -371,11 +388,16 @@ class MainWindow(QMainWindow):
                     session = session_item.data(0, Qt.ItemDataRole.UserRole)
                     if not isinstance(session, ClaudeSession):
                         continue
-                    # Only a change of account or install root moves files on disk.
-                    # Regrouping between code groups is a layout-only edit: code
-                    # groups are keyed by session id, not by the org directory the
-                    # metadata file happens to live in.
-                    if session.account_uuid == account_uuid and session.sessions_root == target_sessions_root:
+                    # Ghost items are staged copies and always produce a COPY,
+                    # even inside the same account. For everything else, only a
+                    # change of account or install root moves files on disk —
+                    # regrouping between code groups is a layout-only edit.
+                    is_ghost = session_item.data(0, STAGED_MODE_ROLE) == "copy"
+                    if (
+                        not is_ghost
+                        and session.account_uuid == account_uuid
+                        and session.sessions_root == target_sessions_root
+                    ):
                         continue
                     target_group_id = self._target_filesystem_group_id(account_item, group_id, session)
                     moves.append(
@@ -386,6 +408,7 @@ class MainWindow(QMainWindow):
                             target_account_uuid=account_uuid,
                             target_group_id=target_group_id,
                             target_code_group_id=code_group_id,
+                            mode=MigrationMode.COPY if is_ghost else MigrationMode.MOVE,
                         )
                     )
         return moves
@@ -414,16 +437,16 @@ class MainWindow(QMainWindow):
 
     def staged_code_group_layout_by_root(
         self,
-        exclude_session_ids: set[str] | None = None,
     ) -> tuple[set[str], dict[Path, tuple[dict[str, str], dict[str, list[str]]]]]:
         """Collect the staged layout, partitioned by sessions root.
 
         Each Claude install root has its own claude_desktop_config.json, so
         assignments/order must be written to the config of the root the account
         lives in. The visible-key set stays global so a session migrated to a
-        different root is purged from its old root's config.
+        different root is purged from its old root's config. Ghost-copy items
+        are skipped: the copy gets a fresh sessionId at execute time, so the
+        old id must neither be reassigned nor purged.
         """
-        excluded = exclude_session_ids or set()
         visible_keys: set[str] = set()
         by_root: dict[Path, tuple[dict[str, str], dict[str, list[str]]]] = {}
         for account_index in range(self.session_tree.topLevelItemCount()):
@@ -440,10 +463,11 @@ class MainWindow(QMainWindow):
                 if code_group_id != UNGROUPED_CODE_GROUP_ID:
                     order_data.setdefault(code_group_id, [])
                 for session_index in range(group_item.childCount()):
-                    session = group_item.child(session_index).data(0, Qt.ItemDataRole.UserRole)
+                    session_item = group_item.child(session_index)
+                    session = session_item.data(0, Qt.ItemDataRole.UserRole)
                     if not isinstance(session, ClaudeSession):
                         continue
-                    if session.session_id in excluded:
+                    if session_item.data(0, STAGED_MODE_ROLE) == "copy":
                         continue
                     session_key = f"code:{session.session_id}"
                     visible_keys.add(session_key)
@@ -470,6 +494,7 @@ class MainWindow(QMainWindow):
         return session.group_id
 
     def _populate_trees(self) -> None:
+        self.session_tree.clear_clipboard()
         self.session_tree.clear()
         uuid_counts: dict[str, int] = {}
         for account in self.accounts:
