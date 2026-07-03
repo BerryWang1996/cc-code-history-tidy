@@ -16,7 +16,7 @@ roots are rolled back from those snapshots. Move mode performs a safe move:
 backup, copy, verify copied metadata, remove the source metadata, then prune
 emptied directories.
 
-Copy mode keeps the source metadata and writes the duplicate with a **new
+Pasting a copy keeps the source metadata and writes the duplicate with a **new
 `sessionId`** (and a matching filename when the file follows the
 `<sessionId>.json` convention). This is required because Claude Desktop keys
 custom-group assignments by `code:<sessionId>` per install root — two files
@@ -87,16 +87,28 @@ The app displays this as:
 
 `Account -> Code group -> Conversation`
 
-The UI is a single editable tree. Drag Code groups or conversations to stage a
-new position. These edits do not touch disk until `Execute` is pressed. If
-Claude Desktop / Claude Code Desktop is running, `Execute` is disabled and the
-tooltip asks you to close the client first.
+The UI is a single editable tree that behaves like a file manager. Everything
+is simulated until `Execute`:
 
-Only dragging a conversation to a **different account** (or the same account in
-a different Claude install root) moves metadata files on disk. Regrouping
-between Code groups within an account is a layout-only change written to that
-root's `claude_desktop_config.json`; group layout for each install root is
-written to that root's own config file.
+- Right-click a conversation (multi-select supported): `复制 (Ctrl+C)` /
+  `剪切 (Ctrl+X)`; right-click a target group/account/conversation:
+  `粘贴 (Ctrl+V)`. `Esc` clears the clipboard.
+- Cut conversations are dimmed until pasted. Pasted copies appear as green
+  `⊕ 待复制` ghost entries (right-click one to undo it); conversations staged
+  to move into another account show a blue `待移入` badge.
+- Dragging = move. Dragging inside one account only regroups (layout change,
+  no file moves); dragging/pasting into another account or install root moves
+  the metadata file at Execute time.
+- Copies are written with a fresh `sessionId` and start out ungrouped; the
+  original keeps its place and grouping.
+- `Execute` shows a summary ("移动 N 个对话、创建 M 个副本、更新分组布局")
+  and only writes after confirmation, with full per-root backups. Re-`Scan`
+  discards all staged edits and the clipboard.
+
+Group layout for each install root is written to that root's own
+`claude_desktop_config.json`. If Claude Desktop / Claude Code Desktop is
+running, `Execute` is disabled and the tooltip asks you to close the client
+first.
 
 If the same account is signed into several Claude installs, its tree items are
 suffixed with the install root name (e.g. `[Claude-3p]`) so they can be told
