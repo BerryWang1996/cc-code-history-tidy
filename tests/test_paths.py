@@ -36,3 +36,4 @@ def test_discover_prefers_gateway_root_current_account(tmp_path):
 
     assert env.current_account_uuid == gateway_account_uuid
     assert env.sessions_root == gateway_sessions_root
+    assert env.sessions_roots == (gateway_sessions_root, fixture.sessions_root)

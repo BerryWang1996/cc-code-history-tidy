@@ -21,12 +21,13 @@ def migrate_sessions(
     backup_root: Path,
     target_group_id: str,
     config_path: Path | None = None,
+    target_sessions_root: Path | None = None,
 ) -> MigrationResult:
     if not session_files:
         raise ValueError("At least one session metadata file is required")
 
     source_root = sessions_root / source_account_uuid
-    target_root = sessions_root / target_account_uuid
+    target_root = (target_sessions_root or sessions_root) / target_account_uuid
     target_root.mkdir(parents=True, exist_ok=True)
 
     copy_pairs = _build_copy_pairs(source_root, target_root, session_files, target_group_id)

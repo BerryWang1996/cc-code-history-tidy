@@ -14,6 +14,7 @@ class ClaudeEnvironment:
     claude_config: Path
     transcript_root: Path
     sessions_root: Path
+    sessions_roots: tuple[Path, ...]
     current_account_uuid: str
 
 
@@ -29,10 +30,9 @@ def discover_claude_environment(
     claude_config = user_profile / ".claude.json"
     current_account_uuid = _read_current_account_uuid(claude_config)
     transcript_root = user_profile / ".claude" / "projects"
-    sessions_root, current_account_uuid = _select_sessions_root(
-        _candidate_sessions_roots(appdata, localappdata),
-        current_account_uuid,
-    )
+    candidate_roots = _candidate_sessions_roots(appdata, localappdata)
+    sessions_root, current_account_uuid = _select_sessions_root(candidate_roots, current_account_uuid)
+    sessions_roots = _ordered_sessions_roots(candidate_roots, sessions_root)
 
     return ClaudeEnvironment(
         user_profile=user_profile,
@@ -41,6 +41,7 @@ def discover_claude_environment(
         claude_config=claude_config,
         transcript_root=transcript_root,
         sessions_root=sessions_root,
+        sessions_roots=sessions_roots,
         current_account_uuid=current_account_uuid,
     )
 
@@ -107,3 +108,9 @@ def _select_sessions_root(candidates: list[Path], current_account_uuid: str) -> 
     if len(account_dirs) == 1:
         return selected, account_dirs[0].name
     return selected, current_account_uuid
+
+
+def _ordered_sessions_roots(candidates: list[Path], selected: Path) -> tuple[Path, ...]:
+    remaining = [root for root in candidates if root != selected]
+    remaining.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return (selected, *remaining)

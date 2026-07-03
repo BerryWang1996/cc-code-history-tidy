@@ -27,6 +27,7 @@ class AccountPartition:
 @dataclass(frozen=True)
 class ClaudeSession:
     metadata_path: Path
+    sessions_root: Path
     account_uuid: str
     session_id: str
     cli_session_id: str

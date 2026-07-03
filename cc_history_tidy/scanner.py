@@ -12,26 +12,37 @@ from cc_history_tidy.code_groups import CodeGroupLayout, load_code_group_layout
 def scan_accounts(env: ClaudeEnvironment) -> list[ScannedAccount]:
     transcript_index = _index_transcripts(env.transcript_root)
     group_labels = resolve_group_labels(env)
-    code_groups = load_code_group_layout(env)
     accounts: list[ScannedAccount] = []
-    for account_dir in sorted(p for p in env.sessions_root.iterdir() if p.is_dir()):
-        partition = AccountPartition(
-            account_uuid=account_dir.name,
-            root=account_dir,
-            is_current=account_dir.name == env.current_account_uuid,
+    for sessions_root in env.sessions_roots:
+        root_env = ClaudeEnvironment(
+            user_profile=env.user_profile,
+            appdata=env.appdata,
+            localappdata=env.localappdata,
+            claude_config=env.claude_config,
+            transcript_root=env.transcript_root,
+            sessions_root=sessions_root,
+            sessions_roots=env.sessions_roots,
+            current_account_uuid=env.current_account_uuid,
         )
-        sessions = tuple(
-            sorted(
-                _scan_sessions(account_dir, transcript_index, group_labels, code_groups),
-                key=lambda session: (
-                    session.code_group_order,
-                    session.code_session_order,
-                    -(session.last_activity_at or 0),
-                    session.title,
-                ),
+        code_groups = load_code_group_layout(root_env)
+        for account_dir in sorted(p for p in sessions_root.iterdir() if p.is_dir()):
+            partition = AccountPartition(
+                account_uuid=account_dir.name,
+                root=account_dir,
+                is_current=account_dir.name == env.current_account_uuid,
             )
-        )
-        accounts.append(ScannedAccount(partition=partition, sessions=sessions))
+            sessions = tuple(
+                sorted(
+                    _scan_sessions(account_dir, sessions_root, transcript_index, group_labels, code_groups),
+                    key=lambda session: (
+                        session.code_group_order,
+                        session.code_session_order,
+                        -(session.last_activity_at or 0),
+                        session.title,
+                    ),
+                )
+            )
+            accounts.append(ScannedAccount(partition=partition, sessions=sessions))
     return accounts
 
 
@@ -43,6 +54,7 @@ def _index_transcripts(transcript_root: Path) -> dict[str, Path]:
 
 def _scan_sessions(
     account_dir: Path,
+    sessions_root: Path,
     transcript_index: dict[str, Path],
     group_labels: dict[str, str],
     code_groups: CodeGroupLayout,
@@ -63,6 +75,7 @@ def _scan_sessions(
         sessions.append(
             ClaudeSession(
                 metadata_path=metadata_path,
+                sessions_root=sessions_root,
                 account_uuid=account_dir.name,
                 session_id=session_id,
                 cli_session_id=cli_session_id,

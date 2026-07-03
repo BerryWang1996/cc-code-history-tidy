@@ -52,6 +52,8 @@ def create_app(argv: list[str] | None = None) -> QApplication:
 @dataclass(frozen=True)
 class PlannedSessionMove:
     session: ClaudeSession
+    source_sessions_root: Path
+    target_sessions_root: Path
     target_account_uuid: str
     target_group_id: str
     target_code_group_id: str
@@ -401,22 +403,35 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.status_label.setText(f"Backup failed; execution cancelled: {exc}")
             return
-        by_move_target: dict[tuple[str, str, str], list[ClaudeSession]] = {}
+        by_move_target: dict[tuple[Path, Path, str, str, str], list[ClaudeSession]] = {}
         for move in planned:
-            key = (move.session.account_uuid, move.target_account_uuid, move.target_group_id)
+            key = (
+                move.source_sessions_root,
+                move.target_sessions_root,
+                move.session.account_uuid,
+                move.target_account_uuid,
+                move.target_group_id,
+            )
             by_move_target.setdefault(key, []).append(move.session)
 
         try:
-            for (source_account_uuid, target_account_uuid, target_group_id), sessions in by_move_target.items():
+            for (
+                source_sessions_root,
+                target_sessions_root,
+                source_account_uuid,
+                target_account_uuid,
+                target_group_id,
+            ), sessions in by_move_target.items():
                 result = migrate_sessions(
-                    sessions_root=self.env.sessions_root,
+                    sessions_root=source_sessions_root,
                     source_account_uuid=source_account_uuid,
                     target_account_uuid=target_account_uuid,
                     session_files=[session.metadata_path for session in sessions],
                     mode=self.selected_migration_mode(),
                     backup_root=self.backup_parent,
                     target_group_id=target_group_id,
-                    config_path=config_path,
+                    config_path=target_sessions_root.parent / "claude_desktop_config.json",
+                    target_sessions_root=target_sessions_root,
                 )
                 copied += len(result.copied)
                 removed += len(result.removed)
@@ -462,6 +477,9 @@ class MainWindow(QMainWindow):
                     continue
                 if not isinstance(group_id, str):
                     continue
+                target_sessions_root = account_item.data(0, Qt.ItemDataRole.UserRole + 2)
+                if not isinstance(target_sessions_root, Path):
+                    continue
                 for session_index in range(group_item.childCount()):
                     session_item = group_item.child(session_index)
                     session = session_item.data(0, Qt.ItemDataRole.UserRole)
@@ -472,6 +490,8 @@ class MainWindow(QMainWindow):
                         moves.append(
                             PlannedSessionMove(
                                 session=session,
+                                source_sessions_root=session.sessions_root,
+                                target_sessions_root=target_sessions_root,
                                 target_account_uuid=account_uuid,
                                 target_group_id=target_group_id,
                                 target_code_group_id=code_group_id,
@@ -547,6 +567,7 @@ class MainWindow(QMainWindow):
             )
             account_item.setData(0, Qt.ItemDataRole.UserRole, account.partition.account_uuid)
             account_item.setData(0, Qt.ItemDataRole.UserRole + 1, _default_group_id(account.sessions))
+            account_item.setData(0, Qt.ItemDataRole.UserRole + 2, account.partition.root.parent)
             account_item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled
                 | Qt.ItemFlag.ItemIsSelectable

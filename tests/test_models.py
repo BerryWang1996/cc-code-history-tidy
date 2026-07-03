@@ -17,6 +17,7 @@ def test_account_hash_does_not_expose_uuid():
 def test_session_can_report_missing_transcript():
     session = ClaudeSession(
         metadata_path=Path("session.json"),
+        sessions_root=Path("accounts"),
         account_uuid="source",
         session_id="desktop-session",
         cli_session_id="cli-session",

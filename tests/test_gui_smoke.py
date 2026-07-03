@@ -257,6 +257,62 @@ def test_main_window_defaults_to_copy_mode_for_cross_account_migration(tmp_path)
     ).exists()
 
 
+def test_main_window_copies_between_different_session_roots(tmp_path):
+    fixture = build_claude_fixture(tmp_path)
+    gateway_account_uuid = "f7ec41bb-c6ae-4053-b2cf-334cd4c46726"
+    gateway_root = fixture.localappdata / "Claude-3p"
+    gateway_sessions_root = gateway_root / "claude-code-sessions"
+    gateway_account_dir = gateway_sessions_root / gateway_account_uuid / fixture.current_group_id
+    gateway_account_dir.mkdir(parents=True)
+    (gateway_root / "config.json").write_text(
+        json.dumps({"lastKnownAccountUuid": gateway_account_uuid}),
+        encoding="utf-8",
+    )
+    (gateway_account_dir / "gateway-session.json").write_text(
+        json.dumps(
+            {
+                "sessionId": "gateway-session",
+                "cliSessionId": "cli-gateway",
+                "title": "Gateway session",
+                "cwd": "C:/Work/gateway",
+                "createdAt": 1,
+                "lastActivityAt": 3,
+                "isArchived": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = discover_claude_environment(
+        fixture.user_profile,
+        fixture.appdata,
+        fixture.localappdata,
+    )
+    create_app([])
+    window = MainWindow(backup_parent=tmp_path / "backups", process_checker=lambda: False)
+    window.load_environment(env)
+    source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
+    gateway_account = _find_item_by_data(window.session_tree, gateway_account_uuid)
+    gateway_ungrouped = _direct_child_by_data(gateway_account, "ungrouped")
+    source_session = source_group.child(0)
+    moved = source_group.takeChild(source_group.indexOfChild(source_session))
+    gateway_ungrouped.addChild(moved)
+
+    window.execute_plan()
+
+    assert (
+        gateway_sessions_root
+        / gateway_account_uuid
+        / fixture.current_group_id
+        / "session-source.json"
+    ).exists()
+    assert (
+        fixture.sessions_root
+        / fixture.source_account_uuid
+        / fixture.source_group_id
+        / "session-source.json"
+    ).exists()
+
+
 def test_execute_rolls_back_files_when_config_write_fails(tmp_path, monkeypatch):
     fixture = build_claude_fixture(tmp_path)
     env = discover_claude_environment(

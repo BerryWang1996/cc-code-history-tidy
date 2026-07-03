@@ -10,10 +10,11 @@ def resolve_group_labels(env: ClaudeEnvironment) -> dict[str, str]:
     labels: dict[str, str] = {}
     _merge_label_from_claude_config(labels, env.claude_config)
 
-    local_agent_root = env.sessions_root.parent / "local-agent-mode-sessions"
-    if local_agent_root.exists():
-        for config_path in local_agent_root.rglob(".claude.json"):
-            _merge_label_from_claude_config(labels, config_path)
+    for sessions_root in env.sessions_roots:
+        local_agent_root = sessions_root.parent / "local-agent-mode-sessions"
+        if local_agent_root.exists():
+            for config_path in local_agent_root.rglob(".claude.json"):
+                _merge_label_from_claude_config(labels, config_path)
 
     return labels
 

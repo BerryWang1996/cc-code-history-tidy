@@ -37,6 +37,7 @@ def test_load_code_group_layout_merges_names_with_config_assignments(monkeypatch
         claude_config=tmp_path / ".claude.json",
         transcript_root=tmp_path / ".claude" / "projects",
         sessions_root=tmp_path / "Claude" / "claude-code-sessions",
+        sessions_roots=(tmp_path / "Claude" / "claude-code-sessions",),
         current_account_uuid="account-a",
     )
     desktop_slice = {
@@ -65,6 +66,7 @@ def test_load_code_group_layout_prefers_desktop_assignments_over_stale_local_sto
         claude_config=tmp_path / ".claude.json",
         transcript_root=tmp_path / ".claude" / "projects",
         sessions_root=tmp_path / "Claude" / "claude-code-sessions",
+        sessions_roots=(tmp_path / "Claude" / "claude-code-sessions",),
         current_account_uuid="account-a",
     )
     desktop_slice = {
