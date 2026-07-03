@@ -43,6 +43,8 @@ from cc_history_tidy.session_tree import (
     STAGED_MODE_ROLE,
     SessionTreeWidget,
     _new_code_group_item,
+    build_account_item,
+    build_session_item,
     format_activity_timestamp,
 )
 
@@ -495,8 +497,14 @@ class MainWindow(QMainWindow):
                 return candidate
         return session.group_id
 
+    def reset_staged_changes(self) -> None:
+        self._populate_trees()
+        self.refresh_execute_state()
+        self.status_label.setText("已恢复到扫描后的初始状态。")
+
     def _populate_trees(self) -> None:
         self.session_tree.clear_clipboard()
+        self.session_tree.clear_history()
         self.session_tree.clear()
         uuid_counts: dict[str, int] = {}
         for account in self.accounts:
@@ -510,16 +518,12 @@ class MainWindow(QMainWindow):
                 # Same account signed into several Claude installs: make the
                 # duplicate tree items distinguishable by their install root.
                 label = f"{label} [{account.partition.root.parent.parent.name}]"
-            account_item = QTreeWidgetItem(
-                [label, f"{len(account.sessions)} session(s)"]
-            )
-            account_item.setData(0, Qt.ItemDataRole.UserRole, account.partition.account_uuid)
-            account_item.setData(0, Qt.ItemDataRole.UserRole + 1, _default_group_id(account.sessions))
-            account_item.setData(0, Qt.ItemDataRole.UserRole + 2, account.partition.root.parent)
-            account_item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-                | Qt.ItemFlag.ItemIsDropEnabled
+            account_item = build_account_item(
+                label,
+                f"{len(account.sessions)} session(s)",
+                account.partition.account_uuid,
+                _default_group_id(account.sessions),
+                account.partition.root.parent,
             )
             self.session_tree.addTopLevelItem(account_item)
             code_group_items: dict[str, QTreeWidgetItem] = {}
@@ -534,14 +538,7 @@ class MainWindow(QMainWindow):
                     account_item.addChild(group_item)
                     group_item.setExpanded(True)
                     code_group_items[session.code_group_id] = group_item
-                session_item = QTreeWidgetItem([session.title, format_activity_timestamp(session.last_activity_at)])
-                session_item.setData(0, Qt.ItemDataRole.UserRole, session)
-                session_item.setFlags(
-                    Qt.ItemFlag.ItemIsEnabled
-                    | Qt.ItemFlag.ItemIsSelectable
-                    | Qt.ItemFlag.ItemIsDragEnabled
-                )
-                group_item.addChild(session_item)
+                group_item.addChild(build_session_item(session))
             if UNGROUPED_CODE_GROUP_ID not in code_group_items:
                 ungrouped_item = _new_code_group_item(
                     UNGROUPED_CODE_GROUP_LABEL,

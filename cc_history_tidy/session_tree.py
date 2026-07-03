@@ -10,9 +10,11 @@ from cc_history_tidy.code_groups import (
     UNGROUPED_CODE_GROUP_ID,
     UNGROUPED_CODE_GROUP_LABEL,
 )
+from cc_history_tidy.i18n import tr
 from cc_history_tidy.models import ClaudeSession, MigrationMode
 
 STAGED_MODE_ROLE = Qt.ItemDataRole.UserRole + 3
+UNDO_LIMIT = 50
 
 CUT_DIM_COLOR = QColor(150, 150, 150)
 MOVE_BADGE_COLOR = QColor(30, 100, 200)
@@ -32,11 +34,52 @@ def format_activity_timestamp(epoch_ms: int | None) -> str:
 
 class SessionTreeWidget(QTreeWidget):
     statusMessage = Signal(str)
+    treeChanged = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.clipboard_mode: MigrationMode | None = None
         self.clipboard_items: list[QTreeWidgetItem] = []
+        self.undo_stack: list = []
+        self.redo_stack: list = []
+
+    def push_undo_snapshot(self) -> None:
+        from cc_history_tidy.tree_state import capture_tree_state
+
+        self.undo_stack.append(capture_tree_state(self))
+        if len(self.undo_stack) > UNDO_LIMIT:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+
+    def undo(self) -> bool:
+        from cc_history_tidy.tree_state import capture_tree_state, restore_tree_state
+
+        if not self.undo_stack:
+            self.statusMessage.emit(tr("status.nothing_to_undo"))
+            return False
+        self.clear_clipboard()
+        self.redo_stack.append(capture_tree_state(self))
+        restore_tree_state(self, self.undo_stack.pop())
+        self.statusMessage.emit(tr("status.undo_done"))
+        self.treeChanged.emit()
+        return True
+
+    def redo(self) -> bool:
+        from cc_history_tidy.tree_state import capture_tree_state, restore_tree_state
+
+        if not self.redo_stack:
+            self.statusMessage.emit(tr("status.nothing_to_redo"))
+            return False
+        self.clear_clipboard()
+        self.undo_stack.append(capture_tree_state(self))
+        restore_tree_state(self, self.redo_stack.pop())
+        self.statusMessage.emit(tr("status.redo_done"))
+        self.treeChanged.emit()
+        return True
+
+    def clear_history(self) -> None:
+        self.undo_stack.clear()
+        self.redo_stack.clear()
 
     def copy_selected_sessions(self) -> int:
         return self._stash_clipboard(MigrationMode.COPY)
@@ -93,6 +136,7 @@ class SessionTreeWidget(QTreeWidget):
         group_item, insert_index = placement
         mode = self.clipboard_mode
         items = [item for item in self.clipboard_items if self._item_alive(item)]
+        self.push_undo_snapshot()
         pasted = 0
         for item in items:
             if mode == MigrationMode.MOVE:
@@ -111,7 +155,11 @@ class SessionTreeWidget(QTreeWidget):
             pasted += 1
         if mode == MigrationMode.MOVE:
             self.clear_clipboard()
-        self.refresh_staged_markers()
+        if pasted == 0:
+            self.undo_stack.pop()
+        else:
+            self.refresh_staged_markers()
+            self.treeChanged.emit()
         return pasted
 
     def _paste_placement(
@@ -139,21 +187,18 @@ class SessionTreeWidget(QTreeWidget):
             return False
 
     def _make_ghost_copy(self, item: QTreeWidgetItem) -> QTreeWidgetItem:
-        session = item.data(0, Qt.ItemDataRole.UserRole)
-        ghost = QTreeWidgetItem([item.text(0), COPY_BADGE_TEXT])
-        ghost.setData(0, Qt.ItemDataRole.UserRole, session)
-        ghost.setData(0, STAGED_MODE_ROLE, "copy")
-        ghost.setForeground(1, QBrush(COPY_BADGE_COLOR))
-        ghost.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        return ghost
+        return build_ghost_session_item(item.data(0, Qt.ItemDataRole.UserRole))
 
     def remove_ghost_item(self, item: QTreeWidgetItem) -> None:
         if not self.is_ghost_item(item):
             return
         parent = item.parent()
-        if parent is not None:
-            parent.takeChild(parent.indexOfChild(item))
-        self.statusMessage.emit("已撤销暂存副本。")
+        if parent is None:
+            return
+        self.push_undo_snapshot()
+        parent.takeChild(parent.indexOfChild(item))
+        self.statusMessage.emit(tr("status.ghost_removed"))
+        self.treeChanged.emit()
 
     def refresh_staged_markers(self) -> None:
         for account_index in range(self.topLevelItemCount()):
@@ -222,24 +267,34 @@ class SessionTreeWidget(QTreeWidget):
             if self.currentItem() is not None:
                 self.paste_to(self.currentItem())
             return
+        if event.matches(QKeySequence.StandardKey.Undo):
+            self.undo()
+            return
+        if event.matches(QKeySequence.StandardKey.Redo):
+            self.redo()
+            return
         if event.key() == Qt.Key.Key_Escape and self.clipboard_items:
             self.clear_clipboard()
-            self.statusMessage.emit("已清空剪贴板。")
+            self.statusMessage.emit(tr("status.clipboard_cleared"))
             return
         super().keyPressEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt override
         moving_items = self._selected_movable_items()
         target_item = self._drop_target_item(event)
-        if moving_items and target_item is not None and self.move_items_to_target(
-            moving_items,
-            target_item,
-            self.dropIndicatorPosition(),
-        ):
-            self.normalize_structure()
-            self.refresh_staged_markers()
-            event.acceptProposedAction()
-            return
+        if moving_items and target_item is not None:
+            self.push_undo_snapshot()
+            if self.move_items_to_target(
+                moving_items,
+                target_item,
+                self.dropIndicatorPosition(),
+            ):
+                self.normalize_structure()
+                self.refresh_staged_markers()
+                self.treeChanged.emit()
+                event.acceptProposedAction()
+                return
+            self.undo_stack.pop()
         event.ignore()
 
     def move_items_to_target(self, moving_items: list[QTreeWidgetItem], target_item: QTreeWidgetItem, position) -> bool:
@@ -394,6 +449,53 @@ class SessionTreeWidget(QTreeWidget):
     @staticmethod
     def _is_above_drop(position) -> bool:
         return str(position).endswith("AboveItem")
+
+
+def build_account_item(
+    label: str,
+    column1: str,
+    account_uuid: str,
+    default_group_id: str,
+    sessions_root,
+) -> QTreeWidgetItem:
+    account_item = QTreeWidgetItem([label, column1])
+    account_item.setData(0, Qt.ItemDataRole.UserRole, account_uuid)
+    account_item.setData(0, Qt.ItemDataRole.UserRole + 1, default_group_id)
+    account_item.setData(0, Qt.ItemDataRole.UserRole + 2, sessions_root)
+    account_item.setFlags(
+        Qt.ItemFlag.ItemIsEnabled
+        | Qt.ItemFlag.ItemIsSelectable
+        | Qt.ItemFlag.ItemIsDropEnabled
+    )
+    return account_item
+
+
+def build_session_item(session: ClaudeSession) -> QTreeWidgetItem:
+    session_item = QTreeWidgetItem(
+        [session.title, format_activity_timestamp(session.last_activity_at)]
+    )
+    session_item.setData(0, Qt.ItemDataRole.UserRole, session)
+    session_item.setFlags(
+        Qt.ItemFlag.ItemIsEnabled
+        | Qt.ItemFlag.ItemIsSelectable
+        | Qt.ItemFlag.ItemIsDragEnabled
+    )
+    return session_item
+
+
+def build_ghost_session_item(session: ClaudeSession) -> QTreeWidgetItem:
+    ghost = QTreeWidgetItem([session.title, tr("badge.copy")])
+    ghost.setData(0, Qt.ItemDataRole.UserRole, session)
+    ghost.setData(0, STAGED_MODE_ROLE, "copy")
+    ghost.setForeground(1, QBrush(COPY_BADGE_COLOR))
+    ghost.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+    return ghost
+
+
+def build_ghost_group_marker(group_item: QTreeWidgetItem, staged_mode: str) -> None:
+    group_item.setData(0, STAGED_MODE_ROLE, staged_mode)
+    group_item.setForeground(1, QBrush(COPY_BADGE_COLOR))
+    group_item.setText(1, tr("badge.copy"))
 
 
 def _new_code_group_item(label: str, code_group_id: str, group_id: str) -> QTreeWidgetItem:
