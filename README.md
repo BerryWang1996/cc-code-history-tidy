@@ -27,17 +27,27 @@ Claude Desktop must be closed before a migration can run. Scanning is allowed
 while Claude is open. Note: the Claude Code CLI also runs as `claude.exe` on
 Windows, so the running-process check triggers while any CLI session is open.
 
-### Known limitation: sidebar group layout lives in three stores
+### Sidebar group layout lives in three stores — all are written
 
 Claude Desktop persists custom Code-group layout in
 `claude_desktop_config.json` **and** in the renderer's Local Storage
-(LevelDB: the `dframe-store` record, which also holds the group *names*, and
-`LSS-persisted.dframe-local-slice`). This tool reads all of them but can only
-safely write `claude_desktop_config.json` — LevelDB cannot be edited while
-guaranteeing integrity. If Claude Desktop rehydrates the layout from its Local
-Storage copy on next launch, staged regrouping done in this tool may be
-reverted. Verify the sidebar after restarting Claude Desktop; the session
-*files* themselves are unaffected by this caveat.
+(LevelDB: the `dframe-store` record, which is the ONLY store holding the
+group *names*, and `LSS-persisted.dframe-local-slice`). Group definitions
+never sync through the config, so a group migrated to another install root
+used to render as ungrouped there.
+
+Execute therefore writes all of them: the config, and the renderer store via
+a LevelDB write-ahead-log append (standard log framing + crc32c, verified by
+an independent re-read; the leveldb directory is part of every backup and
+rollback). This is only safe while Claude Desktop is closed, which Execute
+already enforces. The claude.ai client stores under the
+`https://claude.ai` origin and gateway builds (`Claude-3p`) under
+`app://localhost`; both are handled.
+
+If a migration was executed with a pre-0.2.1 version and groups show as
+ungrouped, close Claude Desktop and run
+`python scripts/sync_layout_to_localstorage.py` once to push the config
+layout into the renderer store.
 
 ## Path Discovery
 
