@@ -98,6 +98,163 @@ def save_code_group_layout_to_desktop_config(
     _atomic_write_json(config_path, data)
 
 
+DFRAME_STORE_KEY = "dframe-store"
+LSS_SLICE_KEY = "LSS-persisted.dframe-local-slice"
+
+
+def save_code_group_layout_to_local_storage(
+    claude_root: Path,
+    visible_session_keys: set[str],
+    assignments: dict[str, str],
+    order_data: dict[str, list[str]],
+    group_labels: dict[str, str] | None = None,
+) -> bool:
+    """Write the staged layout into the renderer's localStorage (LevelDB).
+
+    Claude Desktop's sidebar reads custom-group state from the renderer's
+    zustand store persisted in ``Local Storage/leveldb`` (`dframe-store`).
+    Group *definitions* (id+name) exist ONLY there — the desktop config only
+    syncs assignments/order — so without this write a group migrated to
+    another install root renders as ungrouped.
+
+    Merges our keys into the latest live `dframe-store` and
+    `LSS-persisted.dframe-local-slice` records (preserving every other field),
+    appends them with an authoritative sequence number, and verifies the
+    result through an independent re-read. Only safe while Claude Desktop is
+    closed. Returns False when there is nothing to write to (no leveldb dir or
+    no existing dframe records — e.g. the renderer never ran).
+    """
+    leveldb_root = claude_root / "Local Storage" / "leveldb"
+    if not leveldb_root.is_dir():
+        return False
+    try:
+        from chromium_reader import LocalStorageReader
+    except ImportError:
+        return False
+
+    from cc_history_tidy.leveldb_writer import (
+        append_puts,
+        encode_string,
+        make_localstorage_key,
+    )
+
+    latest: dict[str, object] = {}
+    max_seq = 0
+    reader = LocalStorageReader(leveldb_root)
+    try:
+        for record in reader.records(include_deletions=True):
+            max_seq = max(max_seq, record.leveldb_seq_number)
+            if not record.is_live or record.value is None:
+                continue
+            script_key = str(record.script_key)
+            if script_key not in (DFRAME_STORE_KEY, LSS_SLICE_KEY):
+                continue
+            previous = latest.get(script_key)
+            if previous is None or record.leveldb_seq_number > previous.leveldb_seq_number:
+                latest[script_key] = record
+    finally:
+        reader.close()
+
+    store_record = latest.get(DFRAME_STORE_KEY)
+    if store_record is None:
+        return False
+
+    puts: dict[bytes, bytes] = {}
+    expected: list[tuple[str, str, str]] = []
+
+    store_data = _merge_layout_into_record_json(
+        store_record.value,
+        "state",
+        visible_session_keys,
+        assignments,
+        order_data,
+        group_labels,
+    )
+    if store_data is None:
+        return False
+    puts[make_localstorage_key(store_record.storage_key, DFRAME_STORE_KEY)] = encode_string(store_data)
+    expected.append((store_record.storage_key, DFRAME_STORE_KEY, store_data))
+
+    slice_record = latest.get(LSS_SLICE_KEY)
+    if slice_record is not None:
+        slice_data = _merge_layout_into_record_json(
+            slice_record.value,
+            "value",
+            visible_session_keys,
+            assignments,
+            order_data,
+            group_labels=None,  # the local slice never carries group names
+        )
+        if slice_data is not None:
+            puts[make_localstorage_key(slice_record.storage_key, LSS_SLICE_KEY)] = encode_string(slice_data)
+            expected.append((slice_record.storage_key, LSS_SLICE_KEY, slice_data))
+
+    append_puts(leveldb_root, max_seq + 100, puts)
+
+    # Independent verification: the values we just wrote must be the live ones.
+    verify = LocalStorageReader(leveldb_root)
+    try:
+        live: dict[tuple[str, str], tuple[int, str | None]] = {}
+        for record in verify.records(include_deletions=True):
+            key = (str(record.storage_key), str(record.script_key))
+            current = live.get(key)
+            if current is None or record.leveldb_seq_number > current[0]:
+                live[key] = (record.leveldb_seq_number, record.value)
+    finally:
+        verify.close()
+    for storage_key, script_key, payload in expected:
+        got = live.get((storage_key, script_key), (0, None))[1]
+        if got != payload:
+            raise RuntimeError(
+                f"Local Storage write verification failed for {script_key} in {leveldb_root}"
+            )
+    return True
+
+
+def _merge_layout_into_record_json(
+    raw_value: str,
+    state_key: str,
+    visible_session_keys: set[str],
+    assignments: dict[str, str],
+    order_data: dict[str, list[str]],
+    group_labels: dict[str, str] | None,
+) -> str | None:
+    try:
+        data = json.loads(raw_value.lstrip("﻿\x00\x01"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    state = data.get(state_key)
+    if not isinstance(state, dict):
+        return None
+
+    existing_assignments = _string_dict(state.get("customGroupAssignments"))
+    for session_key in visible_session_keys:
+        existing_assignments.pop(session_key, None)
+    existing_assignments.update(assignments)
+    state["customGroupAssignments"] = existing_assignments
+
+    existing_order = _list_dict(state.get("customGroupOrder"))
+    cleaned_order: dict[str, list[str]] = {}
+    for group_id, session_keys in existing_order.items():
+        cleaned_order[group_id] = [
+            session_key for session_key in session_keys if session_key not in visible_session_keys
+        ]
+    for group_id, session_keys in order_data.items():
+        cleaned_order[group_id] = list(session_keys)
+    state["customGroupOrder"] = cleaned_order
+
+    if group_labels:
+        existing_labels = _custom_group_labels(state.get("customGroups"))
+        existing_labels.update(group_labels)
+        state["customGroups"] = [
+            {"id": group_id, "name": name} for group_id, name in existing_labels.items()
+        ]
+
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
 def _merge_slices(desktop_slice: dict[str, object], local_storage_slice: dict[str, object]) -> dict[str, object]:
     desktop_assignments = _string_dict(desktop_slice.get("customGroupAssignments"))
     local_assignments = _string_dict(local_storage_slice.get("customGroupAssignments"))
@@ -180,8 +337,9 @@ def _read_local_storage_slice(leveldb_root: Path) -> dict[str, object]:
     reader = LocalStorageReader(leveldb_root)
     try:
         for record in reader.records(include_deletions=False):
-            if str(getattr(record, "storage_key", "")) != "https://claude.ai":
-                continue
+            # The claude.ai client stores under https://claude.ai; gateway
+            # builds (Claude-3p) store under app://localhost. Accept any
+            # origin that carries a dframe record.
             script_key = str(getattr(record, "script_key", ""))
             value = getattr(record, "value", "")
             slice_data = _slice_from_local_storage_record(script_key, value)
