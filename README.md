@@ -21,7 +21,7 @@ Pasting a copy keeps the source metadata and writes the duplicate with a **new
 `<sessionId>.json` convention). This is required because Claude Desktop keys
 custom-group assignments by `code:<sessionId>` per install root — two files
 sharing one id would collide. The copy references the same CLI transcript and
-starts out ungrouped.
+is assigned to the group it was pasted into.
 
 Claude Desktop must be closed before a migration can run. Scanning is allowed
 while Claude is open. Note: the Claude Code CLI also runs as `claude.exe` on
@@ -110,8 +110,9 @@ is simulated until `Execute`:
   and only writes after confirmation, with full per-root backups. Re-`Scan`
   discards all staged edits and the clipboard.
 
-The UI is bilingual (中文 / English). It defaults to the system language and
-can be switched from the combo box in the toolbar; the choice is saved to
+The UI is available in 简体中文, 繁體中文, English, 日本語, 한국어, Español,
+Français, Deutsch and Русский. It defaults to the system language and can be
+switched from the combo box in the toolbar; the choice is saved to
 `~/.claude-desktop-migrator/settings.json`.
 
 Group layout for each install root is written to that root's own

@@ -108,8 +108,8 @@ class MainWindow(QMainWindow):
         self.reset_button = QPushButton(tr("btn.reset"))
         self.backups_button = QPushButton(tr("btn.backups"))
         self.language_combo = QComboBox()
-        self.language_combo.addItem("中文", "zh")
-        self.language_combo.addItem("English", "en")
+        for code, native_name in i18n.LANGUAGE_NAMES.items():
+            self.language_combo.addItem(native_name, code)
         current_index = self.language_combo.findData(i18n.current_language())
         self.language_combo.setCurrentIndex(max(current_index, 0))
         action_row.addWidget(self.scan_button)

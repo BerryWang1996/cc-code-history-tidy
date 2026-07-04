@@ -41,3 +41,66 @@ def test_save_language_persists(tmp_path):
     settings = tmp_path / "settings.json"
     i18n.save_language("en", settings)
     assert i18n.detect_default_language(settings) == "en"
+
+
+def test_all_languages_have_all_keys():
+    reference = set(i18n.LANGS["zh"])
+    for code, table in i18n.LANGS.items():
+        assert set(table) == reference, f"language {code} key mismatch"
+
+
+def test_language_names_cover_all_languages():
+    assert set(i18n.LANGUAGE_NAMES) == set(i18n.LANGS)
+
+
+def test_placeholders_consistent_across_languages():
+    import string
+
+    formatter = string.Formatter()
+
+    def fields(template):
+        return {name for _, name, _, _ in formatter.parse(template) if name}
+
+    for key, zh_template in i18n.LANGS["zh"].items():
+        expected = fields(zh_template)
+        for code, table in i18n.LANGS.items():
+            assert fields(table[key]) == expected, f"{code}:{key} placeholder mismatch"
+
+
+def test_detect_maps_traditional_chinese_locales(monkeypatch, tmp_path):
+    from PySide6 import QtCore
+
+    class FakeLocale:
+        @staticmethod
+        def system():
+            class _L:
+                @staticmethod
+                def name():
+                    return "zh_TW"
+
+            return _L()
+
+    monkeypatch.setattr(QtCore, "QLocale", FakeLocale)
+    assert i18n.detect_default_language(tmp_path / "missing.json") == "zh_TW"
+
+
+def test_detect_maps_known_and_unknown_locales(monkeypatch, tmp_path):
+    from PySide6 import QtCore
+
+    def fake_locale(name):
+        class FakeLocale:
+            @staticmethod
+            def system():
+                class _L:
+                    @staticmethod
+                    def name():
+                        return name
+
+                return _L()
+
+        return FakeLocale
+
+    monkeypatch.setattr(QtCore, "QLocale", fake_locale("ja_JP"))
+    assert i18n.detect_default_language(tmp_path / "missing.json") == "ja"
+    monkeypatch.setattr(QtCore, "QLocale", fake_locale("th_TH"))
+    assert i18n.detect_default_language(tmp_path / "missing.json") == "en"
