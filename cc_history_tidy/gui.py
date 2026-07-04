@@ -34,6 +34,7 @@ from cc_history_tidy.backup import BackupSnapshot, create_backup, list_backups, 
 from cc_history_tidy.code_groups import (
     UNGROUPED_CODE_GROUP_ID,
     save_code_group_layout_to_desktop_config,
+    save_code_group_layout_to_local_storage,
 )
 from cc_history_tidy.i18n import tr
 from cc_history_tidy.models import ClaudeSession, MigrationMode, ScannedAccount
@@ -424,6 +425,16 @@ class MainWindow(QMainWindow):
                 for root, (assignments, order_data) in layout_by_root.items():
                     save_code_group_layout_to_desktop_config(
                         root.parent / "claude_desktop_config.json",
+                        visible_keys,
+                        assignments,
+                        order_data,
+                        group_labels=labels_by_root.get(root),
+                    )
+                    # The sidebar reads group DEFINITIONS from the renderer's
+                    # Local Storage, which the config never carries — write it
+                    # too (Claude Desktop is guaranteed closed here).
+                    save_code_group_layout_to_local_storage(
+                        root.parent,
                         visible_keys,
                         assignments,
                         order_data,

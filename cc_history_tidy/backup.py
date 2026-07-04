@@ -15,6 +15,8 @@ class BackupSnapshot:
     manifest_path: Path
     config_path: Path | None = None
     snapshot_config_path: Path | None = None
+    local_storage_path: Path | None = None
+    snapshot_local_storage_path: Path | None = None
     reason: str = ""
 
 
@@ -40,12 +42,19 @@ def create_backup(
             created_at = f"{base_name}-{suffix}"
             suffix += 1
     snapshot_root = root / "claude-code-sessions"
+    # The renderer's localStorage (LevelDB) is written during execute too, so
+    # it must be part of the same rollback unit.
+    local_storage_path = sessions_root.parent / "Local Storage" / "leveldb"
     try:
         shutil.copytree(sessions_root, snapshot_root)
         snapshot_config_path = None
         if config_path is not None and config_path.exists():
             snapshot_config_path = root / config_path.name
             shutil.copy2(config_path, snapshot_config_path)
+        snapshot_local_storage_path = None
+        if local_storage_path.is_dir():
+            snapshot_local_storage_path = root / "local-storage-leveldb"
+            shutil.copytree(local_storage_path, snapshot_local_storage_path)
         manifest_path = root / "backup-manifest.json"
         manifest_path.write_text(
             json.dumps(
@@ -56,6 +65,10 @@ def create_backup(
                     "snapshot_root": str(snapshot_root),
                     "config_path": str(config_path) if config_path is not None else None,
                     "snapshot_config_path": str(snapshot_config_path) if snapshot_config_path is not None else None,
+                    "local_storage_path": str(local_storage_path),
+                    "snapshot_local_storage_path": (
+                        str(snapshot_local_storage_path) if snapshot_local_storage_path is not None else None
+                    ),
                 },
                 indent=2,
             ),
@@ -72,6 +85,8 @@ def create_backup(
         manifest_path=manifest_path,
         config_path=config_path,
         snapshot_config_path=snapshot_config_path,
+        local_storage_path=local_storage_path,
+        snapshot_local_storage_path=snapshot_local_storage_path,
         reason=reason,
     )
 
@@ -116,6 +131,31 @@ def restore_backup(backup: BackupSnapshot) -> None:
             # go away with the rollback.
             backup.config_path.unlink()
 
+    if backup.local_storage_path is not None and backup.snapshot_local_storage_path is not None:
+        if backup.snapshot_local_storage_path.exists():
+            _swap_dir_from_snapshot(backup.snapshot_local_storage_path, backup.local_storage_path)
+
+
+def _swap_dir_from_snapshot(snapshot_dir: Path, live_dir: Path) -> None:
+    staging = live_dir.parent / f"{live_dir.name}.restore-staging"
+    displaced = live_dir.parent / f"{live_dir.name}.restore-displaced"
+    shutil.rmtree(staging, ignore_errors=True)
+    shutil.rmtree(displaced, ignore_errors=True)
+    shutil.copytree(snapshot_dir, staging)
+    try:
+        if live_dir.exists():
+            live_dir.rename(displaced)
+        try:
+            staging.rename(live_dir)
+        except OSError:
+            if displaced.exists():
+                displaced.rename(live_dir)
+            raise
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    shutil.rmtree(displaced, ignore_errors=True)
+
 
 def list_backups(backup_parent: Path) -> list[BackupSnapshot]:
     if not backup_parent.exists():
@@ -142,6 +182,11 @@ def load_backup(root: Path) -> BackupSnapshot:
         recorded = Path(manifest["snapshot_config_path"])
         local_config = root / recorded.name
         snapshot_config_path = local_config if local_config.exists() else recorded
+    snapshot_local_storage_path = None
+    if manifest.get("snapshot_local_storage_path"):
+        recorded = Path(manifest["snapshot_local_storage_path"])
+        local_ls = root / "local-storage-leveldb"
+        snapshot_local_storage_path = local_ls if local_ls.exists() else recorded
     return BackupSnapshot(
         root=root,
         sessions_root=Path(manifest["sessions_root"]),
@@ -149,5 +194,9 @@ def load_backup(root: Path) -> BackupSnapshot:
         manifest_path=manifest_path,
         config_path=Path(manifest["config_path"]) if manifest.get("config_path") else None,
         snapshot_config_path=snapshot_config_path,
+        local_storage_path=(
+            Path(manifest["local_storage_path"]) if manifest.get("local_storage_path") else None
+        ),
+        snapshot_local_storage_path=snapshot_local_storage_path,
         reason=str(manifest.get("reason") or ""),
     )
