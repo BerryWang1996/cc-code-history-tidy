@@ -140,3 +140,57 @@ def test_read_slice_accepts_gateway_origin(tmp_path):
     slice_data = _read_local_storage_slice(leveldb)
 
     assert slice_data.get("customGroupAssignments") == {"code:stale": "cg-old"}
+
+
+def test_save_layout_enables_grouped_view_when_groups_present(tmp_path):
+    claude_root = tmp_path / "Claude-3p"
+    leveldb = _seed_gateway_store(claude_root)
+
+    save_code_group_layout_to_local_storage(
+        claude_root,
+        visible_session_keys=set(),
+        assignments={"code:s1": "cg-a"},
+        order_data={"cg-a": ["code:s1"]},
+        group_labels={"cg-a": "A"},
+    )
+
+    store = _live_json(leveldb, "app://localhost", "dframe-store")
+    assert store["state"]["groupByByMode"]["code"] == "custom"
+    # the LSS slice never carries the view switch
+    lss = _live_json(leveldb, "app://localhost", "LSS-persisted.dframe-local-slice")
+    assert "groupByByMode" not in lss["value"]
+
+
+def test_save_layout_keeps_explicit_group_by_choice(tmp_path):
+    claude_root = tmp_path / "Claude"
+    leveldb = claude_root / "Local Storage" / "leveldb"
+    leveldb.mkdir(parents=True)
+    store = {
+        "state": {
+            "customGroups": [],
+            "customGroupAssignments": {},
+            "customGroupOrder": {},
+            "groupByByMode": {"code": "recency"},
+        },
+        "version": 7,
+    }
+    append_puts(
+        leveldb,
+        1,
+        {
+            make_localstorage_key("https://claude.ai", "dframe-store"): encode_string(
+                json.dumps(store, separators=(",", ":"))
+            )
+        },
+    )
+
+    save_code_group_layout_to_local_storage(
+        claude_root,
+        visible_session_keys=set(),
+        assignments={"code:s1": "cg-a"},
+        order_data={"cg-a": ["code:s1"]},
+        group_labels={"cg-a": "A"},
+    )
+
+    state = _live_json(leveldb, "https://claude.ai", "dframe-store")["state"]
+    assert state["groupByByMode"] == {"code": "recency"}  # explicit choice kept

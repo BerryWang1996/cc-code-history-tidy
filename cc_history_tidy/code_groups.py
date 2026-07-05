@@ -252,6 +252,18 @@ def _merge_layout_into_record_json(
             {"id": group_id, "name": name} for group_id, name in existing_labels.items()
         ]
 
+    # The sidebar only renders the grouped view when groupByByMode.code is
+    # "custom" — with groups present but the switch unset, everything shows
+    # flat under Recents. Flip it when we deliver groups, but never override
+    # an explicit user choice.
+    if state_key == "state" and (group_labels or order_data):
+        group_by = state.get("groupByByMode")
+        if not isinstance(group_by, dict):
+            group_by = {}
+        if not group_by.get("code"):
+            group_by["code"] = "custom"
+            state["groupByByMode"] = group_by
+
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
