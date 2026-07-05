@@ -58,6 +58,11 @@ class ScannedAccount:
     # are per install root, so the same empty groups are attached to every
     # account of the root.
     empty_code_groups: tuple[tuple[str, str], ...] = ()
+    # Account email when discoverable from local configs; "" otherwise.
+    email: str = ""
+    # None for claude.ai installs; the gateway base URL for 3p installs
+    # ("" when the URL could not be determined).
+    gateway_url: str | None = None
 
 
 @dataclass(frozen=True)

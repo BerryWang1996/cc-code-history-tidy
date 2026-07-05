@@ -75,10 +75,22 @@ The app does not hard-code a user name. It discovers paths from:
 If multiple Claude Desktop roots are found, the root containing the current
 `oauthAccount.accountUuid` is preferred.
 
-## Account Label Config
+## Account Labels
 
-Accounts are identified by Claude account UUIDs, but the UI can display friendly
-account labels from:
+Accounts are identified by Claude account UUIDs. The tree labels them, in
+priority order:
+
+1. a label you configure (see below),
+2. the account's **email address**, discovered from `~/.claude.json` and the
+   `local-agent-mode-sessions/**/.claude.json` snapshots each install keeps,
+3. an anonymized hash.
+
+Accounts living in a **gateway** install (`deploymentMode: "3p"`) are suffixed
+with the gateway's server URL (from `host-creds-*.json` →
+`ANTHROPIC_BASE_URL`), e.g. `user@example.com [https://gw.example.com]`, so
+claude.ai and gateway data are easy to tell apart.
+
+Custom labels can be configured in:
 
 `%USERPROFILE%\.claude-desktop-migrator\account-groups.json`
 
@@ -97,7 +109,6 @@ Example:
 }
 ```
 
-Unconfigured accounts are shown with an anonymized hash label.
 
 ## Claude Code Groups
 

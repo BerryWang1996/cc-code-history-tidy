@@ -650,9 +650,18 @@ class MainWindow(QMainWindow):
                 uuid_counts.get(account.partition.account_uuid, 0) + 1
             )
         for account in self.accounts:
-            display = self.account_config.display_for(account.partition.account_uuid)
-            label = display.label
-            if uuid_counts[account.partition.account_uuid] > 1:
+            # Label priority: user-configured label > account email > hash.
+            if account.partition.account_uuid in self.account_config.accounts:
+                label = self.account_config.display_for(account.partition.account_uuid).label
+            elif account.email:
+                label = account.email
+            else:
+                label = self.account_config.display_for(account.partition.account_uuid).label
+            if account.gateway_url is not None:
+                # Gateway install: the server URL tells accounts apart better
+                # than any directory name could.
+                label = f"{label} [{account.gateway_url or 'gateway'}]"
+            elif uuid_counts[account.partition.account_uuid] > 1:
                 # Same account signed into several Claude installs: make the
                 # duplicate tree items distinguishable by their install root.
                 label = f"{label} [{account.partition.root.parent.parent.name}]"

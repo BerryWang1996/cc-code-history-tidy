@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from cc_history_tidy.account_identity import collect_account_emails, gateway_server_url
 from cc_history_tidy.models import AccountPartition, ClaudeSession, ScannedAccount
 from cc_history_tidy.paths import ClaudeEnvironment
 from cc_history_tidy.group_labels import resolve_group_labels
@@ -16,6 +17,7 @@ from cc_history_tidy.code_groups import (
 def scan_accounts(env: ClaudeEnvironment) -> list[ScannedAccount]:
     transcript_index = _index_transcripts(env.transcript_root)
     group_labels = resolve_group_labels(env)
+    account_emails = collect_account_emails(env)
     accounts: list[ScannedAccount] = []
     for sessions_root in env.sessions_roots:
         root_env = ClaudeEnvironment(
@@ -49,12 +51,15 @@ def scan_accounts(env: ClaudeEnvironment) -> list[ScannedAccount]:
             )
             root_accounts.append((partition, sessions))
         empty_groups = _empty_code_groups(code_groups, root_accounts)
+        gateway_url = gateway_server_url(sessions_root.parent)
         for partition, sessions in root_accounts:
             accounts.append(
                 ScannedAccount(
                     partition=partition,
                     sessions=sessions,
                     empty_code_groups=empty_groups,
+                    email=account_emails.get(partition.account_uuid, ""),
+                    gateway_url=gateway_url,
                 )
             )
     return accounts
