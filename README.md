@@ -3,6 +3,16 @@
 A Windows desktop utility for migrating Claude Desktop Code-mode conversation
 metadata between local Claude account partitions.
 
+![CC Code History Tidy — Account / Code group / Conversation tree with copy, cut, paste, undo and backup controls](docs/images/screenshot.png)
+
+> Move, copy and regroup Claude Desktop **Code** conversations across your local
+> Claude accounts with a file-manager-style tree — everything is simulated until
+> you press **Execute**, and every change is backed up. Available in 9 languages.
+>
+> **Download:** grab `cc-code-history-tidy.exe` from the
+> [latest release](https://github.com/BerryWang1996/cc-code-history-tidy/releases/latest)
+> (portable, no install). *(Conversation titles in the screenshot are blurred for privacy.)*
+
 ## Safety Model
 
 The app migrates Claude Desktop Code session metadata only. It does not edit
