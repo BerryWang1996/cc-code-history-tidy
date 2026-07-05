@@ -468,3 +468,66 @@ def _direct_child_by_data(item, value):
         if child.data(0, 256) == value:
             return child
     return None
+
+
+def test_execute_button_reenables_via_process_watch(tmp_path):
+    fixture = build_claude_fixture(tmp_path)
+    env = discover_claude_environment(
+        fixture.user_profile, fixture.appdata, fixture.localappdata
+    )
+    create_app([])
+    running = {"value": True}
+    window = MainWindow(
+        backup_parent=tmp_path / "backups",
+        process_checker=lambda: running["value"],
+    )
+    window.load_environment(env)
+    assert not window.execute_button.isEnabled()
+    assert window._process_watch_timer.isActive()
+
+    # Claude closes; the next timer tick must re-enable the button.
+    running["value"] = False
+    window._process_watch_timer.timeout.emit()
+
+    assert window.execute_button.isEnabled()
+
+
+def test_empty_layout_groups_are_shown_and_usable(tmp_path):
+    import json as _json
+
+    fixture = build_claude_fixture(tmp_path)
+    config_path = fixture.sessions_root.parent / "claude_desktop_config.json"
+    config = _json.loads(config_path.read_text(encoding="utf-8"))
+    slice_data = config["preferences"]["epitaxyPrefs"]["dframe-local-slice"]
+    slice_data["customGroups"].append({"id": "cg-empty", "name": "Empty Group"})
+    slice_data["customGroupOrder"]["cg-empty"] = []
+    config_path.write_text(_json.dumps(config), encoding="utf-8")
+    env = discover_claude_environment(
+        fixture.user_profile, fixture.appdata, fixture.localappdata
+    )
+    create_app([])
+    window = MainWindow(
+        backup_parent=tmp_path / "backups",
+        process_checker=lambda: False,
+        execute_confirmer=lambda summary: True,
+    )
+    window.load_environment(env)
+
+    current_account = _find_item_by_data(window.session_tree, fixture.current_account_uuid)
+    empty_group = _direct_child_by_data(current_account, "cg-empty")
+    assert empty_group is not None
+    assert empty_group.text(0) == "Empty Group"
+    assert empty_group.childCount() == 0
+    # no changes staged just by showing it
+    assert window.planned_session_moves() == []
+    assert window.tree_signature() == window._loaded_tree_signature
+
+    # it accepts a cross-account move like any other group
+    source_group = _find_item_by_data(window.session_tree, fixture.source_code_group_id)
+    window.session_tree.setCurrentItem(source_group.child(0))
+    window.session_tree.cut_selected_sessions()
+    window.session_tree.paste_to(empty_group)
+
+    planned = window.planned_session_moves()
+    assert len(planned) == 1
+    assert planned[0].target_code_group_id == "cg-empty"

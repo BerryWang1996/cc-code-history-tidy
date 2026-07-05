@@ -53,6 +53,11 @@ class ClaudeSession:
 class ScannedAccount:
     partition: AccountPartition
     sessions: tuple[ClaudeSession, ...]
+    # Groups defined in the root's layout that currently contain no sessions
+    # anywhere in that root: (code_group_id, label) pairs. Group definitions
+    # are per install root, so the same empty groups are attached to every
+    # account of the root.
+    empty_code_groups: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

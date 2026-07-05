@@ -23,9 +23,11 @@ custom-group assignments by `code:<sessionId>` per install root — two files
 sharing one id would collide. The copy references the same CLI transcript and
 is assigned to the group it was pasted into.
 
-Claude Desktop must be closed before a migration can run. Scanning is allowed
-while Claude is open. Note: the Claude Code CLI also runs as `claude.exe` on
-Windows, so the running-process check triggers while any CLI session is open.
+Claude Desktop must be closed before a migration can run; scanning is allowed
+while Claude is open. Detection probes the LevelDB `LOCK` files Claude Desktop
+holds while running (re-checked every 2 seconds, so the Execute button
+re-enables by itself), and is not fooled by the Claude Code CLI, which also
+runs as `claude.exe`.
 
 ### Sidebar group layout lives in three stores — all are written
 
@@ -106,6 +108,8 @@ is simulated until `Execute`:
   The virtual `Ungrouped` group cannot be copied or cut.
 - Pasting/dragging a group into an account that already has a group with the
   **same display name** merges the sessions into the existing group.
+- Groups defined in the layout but currently empty are shown too (mirroring
+  the Claude Desktop sidebar) and accept drops/pastes like any group.
 - Cut items are dimmed until pasted. Pasted copies appear as green
   `⊕ 待复制` ghost entries (right-click one to undo it); conversations staged
   to move into another account show a blue `待移入` badge.

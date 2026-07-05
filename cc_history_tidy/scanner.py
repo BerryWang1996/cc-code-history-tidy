@@ -6,7 +6,11 @@ from pathlib import Path
 from cc_history_tidy.models import AccountPartition, ClaudeSession, ScannedAccount
 from cc_history_tidy.paths import ClaudeEnvironment
 from cc_history_tidy.group_labels import resolve_group_labels
-from cc_history_tidy.code_groups import CodeGroupLayout, load_code_group_layout
+from cc_history_tidy.code_groups import (
+    UNGROUPED_CODE_GROUP_ID,
+    CodeGroupLayout,
+    load_code_group_layout,
+)
 
 
 def scan_accounts(env: ClaudeEnvironment) -> list[ScannedAccount]:
@@ -25,6 +29,7 @@ def scan_accounts(env: ClaudeEnvironment) -> list[ScannedAccount]:
             current_account_uuid=env.current_account_uuid,
         )
         code_groups = load_code_group_layout(root_env)
+        root_accounts: list[tuple[AccountPartition, tuple[ClaudeSession, ...]]] = []
         for account_dir in sorted(p for p in sessions_root.iterdir() if p.is_dir()):
             partition = AccountPartition(
                 account_uuid=account_dir.name,
@@ -42,8 +47,41 @@ def scan_accounts(env: ClaudeEnvironment) -> list[ScannedAccount]:
                     ),
                 )
             )
-            accounts.append(ScannedAccount(partition=partition, sessions=sessions))
+            root_accounts.append((partition, sessions))
+        empty_groups = _empty_code_groups(code_groups, root_accounts)
+        for partition, sessions in root_accounts:
+            accounts.append(
+                ScannedAccount(
+                    partition=partition,
+                    sessions=sessions,
+                    empty_code_groups=empty_groups,
+                )
+            )
     return accounts
+
+
+def _empty_code_groups(
+    code_groups: CodeGroupLayout,
+    root_accounts: list[tuple[AccountPartition, tuple[ClaudeSession, ...]]],
+) -> tuple[tuple[str, str], ...]:
+    """Layout-defined groups with no sessions anywhere in the root.
+
+    Claude Desktop keeps showing these in its sidebar, so the tree must show
+    them too (and they are valid paste/drag targets)."""
+    used = {
+        session.code_group_id
+        for _, sessions in root_accounts
+        for session in sessions
+    }
+    catalog: list[str] = list(code_groups.group_order)
+    for group_id in code_groups.labels:
+        if group_id not in catalog:
+            catalog.append(group_id)
+    return tuple(
+        (group_id, code_groups.label_for_group(group_id))
+        for group_id in catalog
+        if group_id not in used and group_id != UNGROUPED_CODE_GROUP_ID
+    )
 
 
 def _index_transcripts(transcript_root: Path) -> dict[str, Path]:

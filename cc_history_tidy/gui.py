@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -152,6 +152,12 @@ class MainWindow(QMainWindow):
         self.session_tree.treeChanged.connect(self._on_tree_changed)
         self.refresh_execute_state()
         self._refresh_undo_buttons()
+        # The Execute button gates on whether Claude Desktop is running; poll
+        # so closing/opening Claude is picked up without restarting the tool.
+        self._process_watch_timer = QTimer(self)
+        self._process_watch_timer.setInterval(2000)
+        self._process_watch_timer.timeout.connect(self.refresh_execute_state)
+        self._process_watch_timer.start()
 
     def scan_default_environment(self) -> None:
         try:
@@ -677,6 +683,20 @@ class MainWindow(QMainWindow):
                     group_item.setExpanded(True)
                     code_group_items[session.code_group_id] = group_item
                 group_item.addChild(build_session_item(session))
+            # Layout-defined groups with no sessions anywhere in this root:
+            # Claude Desktop keeps showing them, so mirror them here — they
+            # are also the natural drop/paste targets for refilling.
+            for empty_group_id, empty_label in account.empty_code_groups:
+                if empty_group_id in code_group_items:
+                    continue
+                empty_item = _new_code_group_item(
+                    empty_label,
+                    empty_group_id,
+                    _default_group_id(account.sessions),
+                )
+                account_item.addChild(empty_item)
+                empty_item.setExpanded(True)
+                code_group_items[empty_group_id] = empty_item
             if UNGROUPED_CODE_GROUP_ID not in code_group_items:
                 ungrouped_item = _new_code_group_item(
                     tr("tree.ungrouped"),
