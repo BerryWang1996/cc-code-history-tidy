@@ -34,10 +34,12 @@ sharing one id would collide. The copy references the same CLI transcript and
 is assigned to the group it was pasted into.
 
 Claude Desktop must be closed before a migration can run; scanning is allowed
-while Claude is open. Detection probes the LevelDB `LOCK` files Claude Desktop
-holds while running (re-checked every 2 seconds, so the Execute button
-re-enables by itself), and is not fooled by the Claude Code CLI, which also
-runs as `claude.exe`.
+while Claude is open. Detection enumerates running processes by image path
+(re-checked every 2 seconds, so the Execute button re-enables by itself): a
+`claude.exe` outside a `claude-code` directory is Desktop, while the Claude
+Code CLI — which also runs as `claude.exe` but lives under `claude-code` — is
+correctly ignored. (The earlier LevelDB-lock check was unreliable because the
+MSIX Desktop is suspended in the background and releases its locks.)
 
 ### Sidebar group layout lives in three stores — all are written
 

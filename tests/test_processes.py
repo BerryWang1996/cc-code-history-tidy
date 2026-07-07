@@ -1,45 +1,48 @@
-from pathlib import Path
+from cc_history_tidy.processes import (
+    claude_desktop_running_from_paths,
+    is_claude_desktop_path,
+    is_claude_desktop_running,
+)
 
-from cc_history_tidy import processes
-from cc_history_tidy.processes import claude_lock_paths, is_claude_desktop_running
-
-
-def _make_lock(root: Path) -> Path:
-    lock = root / "Claude" / "Local Storage" / "leveldb" / "LOCK"
-    lock.parent.mkdir(parents=True)
-    lock.write_bytes(b"")
-    return lock
-
-
-def test_lock_paths_found_and_deduplicated(tmp_path):
-    appdata = tmp_path / "Roaming"
-    localappdata = tmp_path / "Local"
-    lock = _make_lock(appdata)
-    (localappdata / "Claude-3p" / "Local Storage" / "leveldb").mkdir(parents=True)
-    lock3p = localappdata / "Claude-3p" / "Local Storage" / "leveldb" / "LOCK"
-    lock3p.write_bytes(b"")
-
-    paths = claude_lock_paths(appdata=appdata, localappdata=localappdata)
-
-    assert lock in paths and lock3p in paths
-    assert len(paths) == len(set(p.resolve() for p in paths))
+MSIX_DESKTOP = r"C:\Program Files\WindowsApps\Claude_1.18286.0.0_x64__pzs8sxrjxfjjc\app\Claude.exe"
+ELECTRON_DESKTOP = r"C:\Users\me\AppData\Local\Claude\app-0.1.2\Claude.exe"
+GATEWAY_CLI = r"C:\Users\me\AppData\Local\Claude-3p\claude-code\2.1.197\claude.exe"
+UNRELATED = r"C:\Windows\notepad.exe"
 
 
-def test_running_check_false_when_locks_free(tmp_path, monkeypatch):
-    monkeypatch.setattr(processes.os, "name", "nt")
-    lock = _make_lock(tmp_path)
-
-    assert is_claude_desktop_running(lock_paths=[lock]) is False
+def test_desktop_paths_are_recognized():
+    assert is_claude_desktop_path(MSIX_DESKTOP)
+    assert is_claude_desktop_path(ELECTRON_DESKTOP)
 
 
-def test_running_check_true_when_lock_held(tmp_path, monkeypatch):
-    monkeypatch.setattr(processes.os, "name", "nt")
-    lock = _make_lock(tmp_path)
-    monkeypatch.setattr(processes, "_lock_is_held", lambda path: True)
-
-    assert is_claude_desktop_running(lock_paths=[lock]) is True
+def test_cli_path_is_not_desktop():
+    # The Claude Code CLI lives under a claude-code directory and must not
+    # block Execute.
+    assert not is_claude_desktop_path(GATEWAY_CLI)
 
 
-def test_running_check_false_off_windows(monkeypatch):
-    monkeypatch.setattr(processes.os, "name", "posix")
-    assert is_claude_desktop_running() is False
+def test_unrelated_process_is_not_desktop():
+    assert not is_claude_desktop_path(UNRELATED)
+
+
+def test_unresolvable_path_fails_safe_as_desktop():
+    # A claude.exe whose path we couldn't read is assumed to be Desktop so we
+    # never write while it might be open.
+    assert is_claude_desktop_path("")
+
+
+def test_running_true_when_any_desktop_path_present():
+    assert claude_desktop_running_from_paths([GATEWAY_CLI, MSIX_DESKTOP])
+
+
+def test_running_false_when_only_cli():
+    assert not claude_desktop_running_from_paths([GATEWAY_CLI, GATEWAY_CLI])
+
+
+def test_running_false_when_no_claude():
+    assert not claude_desktop_running_from_paths([])
+
+
+def test_injected_paths_bypass_enumeration():
+    assert is_claude_desktop_running(image_paths=[MSIX_DESKTOP]) is True
+    assert is_claude_desktop_running(image_paths=[GATEWAY_CLI]) is False
