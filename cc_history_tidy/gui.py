@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
         account_config_path: Path | None = None,
         process_checker: Callable[[], bool] = is_claude_desktop_running,
         execute_confirmer: Callable[[str], bool] | None = None,
+        info_notifier: Callable[[str, str], None] | None = None,
         settings_path: Path | None = None,
     ) -> None:
         super().__init__()
@@ -148,6 +149,8 @@ class MainWindow(QMainWindow):
         self.account_config: AccountLabelConfig = load_account_label_config(self.account_config_path)
         self.process_checker = process_checker
         self.execute_confirmer = execute_confirmer
+        self.info_notifier = info_notifier
+        self._pending_localstorage_warning: list[Path] | None = None
         self.session_tree.statusMessage.connect(self.status_label.setText)
         self.session_tree.treeChanged.connect(self._on_tree_changed)
         self.refresh_execute_state()
@@ -334,6 +337,7 @@ class MainWindow(QMainWindow):
             return
         copied = 0
         removed = 0
+        self._pending_localstorage_warning = None
         move_count = sum(1 for move in planned if move.mode == MigrationMode.MOVE)
         copy_count = len(planned) - move_count
         if not self._confirm_execution(
@@ -411,14 +415,16 @@ class MainWindow(QMainWindow):
                 )
                 copied += len(result.copied)
                 removed += len(result.removed)
-                if batch_mode == MigrationMode.COPY and len(result.session_id_mapping) == len(
-                    batch_moves
-                ):
+                if batch_mode == MigrationMode.COPY and result.session_id_mapping:
                     # Copies get fresh sessionIds; assign each new id to the
                     # code group the ghost was pasted into so the copy shows up
-                    # grouped after the next Claude Desktop launch.
-                    for move, (_old_id, new_id) in zip(batch_moves, result.session_id_mapping):
-                        if move.target_code_group_id == UNGROUPED_CODE_GROUP_ID:
+                    # grouped after the next Claude Desktop launch. Match by old
+                    # id per item — a single malformed source (no sessionId, so
+                    # no mapping entry) must not ungroup the rest of the batch.
+                    new_by_old = dict(result.session_id_mapping)
+                    for move in batch_moves:
+                        new_id = new_by_old.get(move.session.session_id)
+                        if new_id is None or move.target_code_group_id == UNGROUPED_CODE_GROUP_ID:
                             continue
                         assignments, order_data = layout_by_root.setdefault(
                             move.target_sessions_root, ({}, {})
@@ -428,6 +434,7 @@ class MainWindow(QMainWindow):
                         order_data.setdefault(move.target_code_group_id, []).append(session_key)
 
             if has_tree_changes or copy_count:
+                skipped_localstorage: list[Path] = []
                 for root, (assignments, order_data) in layout_by_root.items():
                     save_code_group_layout_to_desktop_config(
                         root.parent / "claude_desktop_config.json",
@@ -439,13 +446,20 @@ class MainWindow(QMainWindow):
                     # The sidebar reads group DEFINITIONS from the renderer's
                     # Local Storage, which the config never carries — write it
                     # too (Claude Desktop is guaranteed closed here).
-                    save_code_group_layout_to_local_storage(
+                    if not save_code_group_layout_to_local_storage(
                         root.parent,
                         visible_keys,
                         assignments,
                         order_data,
                         group_labels=labels_by_root.get(root),
-                    )
+                    ):
+                        skipped_localstorage.append(root)
+                if skipped_localstorage:
+                    # The config was written but the renderer store wasn't (the
+                    # Desktop UI has never been opened in that install, so no
+                    # dframe-store exists). Copied/moved groups there will show
+                    # as ungrouped until the user opens that Desktop once.
+                    self._pending_localstorage_warning = skipped_localstorage
         except Exception as exc:
             restore_errors: list[str] = []
             for root, backup in backups.items():
@@ -469,7 +483,32 @@ class MainWindow(QMainWindow):
             return
 
         self.load_environment(self.env)
-        self.status_label.setText(tr("status.executed", copied=copied, removed=removed))
+        skipped = self._pending_localstorage_warning
+        if skipped:
+            self._pending_localstorage_warning = None
+            self._notify_info(
+                tr("dlg.localstorage_skipped_title"),
+                tr("dlg.localstorage_skipped_body", roots="\n".join(str(r) for r in skipped)),
+            )
+            self.status_label.setText(
+                tr("status.executed", copied=copied, removed=removed)
+                + " " + tr("status.localstorage_skipped_suffix")
+            )
+        else:
+            self.status_label.setText(tr("status.executed", copied=copied, removed=removed))
+
+    def _notify_info(self, title: str, body: str) -> None:
+        # Injectable so tests can capture it. The default is a NON-MODAL box
+        # (open(), not the blocking static information()) so that automated GUI
+        # tests, which drive the window without a running event loop, never
+        # deadlock waiting for a user to dismiss a modal.
+        if self.info_notifier is not None:
+            self.info_notifier(title, body)
+            return
+        box = QMessageBox(QMessageBox.Icon.Information, title, body, parent=self)
+        self._info_box = box  # keep a reference so it isn't GC'd immediately
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.open()
 
     def _confirm_execution(self, summary: str) -> bool:
         if self.execute_confirmer is not None:
@@ -664,7 +703,11 @@ class MainWindow(QMainWindow):
             elif uuid_counts[account.partition.account_uuid] > 1:
                 # Same account signed into several Claude installs: make the
                 # duplicate tree items distinguishable by their install root.
-                label = f"{label} [{account.partition.root.parent.parent.name}]"
+                # The install dir is usually named "Claude" for both the
+                # standalone and MSIX builds, so include its parent segment
+                # (e.g. "Roaming/Claude" vs "Local/Claude") to keep them apart.
+                install_dir = account.partition.root.parent.parent
+                label = f"{label} [{install_dir.parent.name}/{install_dir.name}]"
             account_item = build_account_item(
                 label,
                 tr("tree.sessions_count", n=len(account.sessions)),

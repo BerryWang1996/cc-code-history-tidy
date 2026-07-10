@@ -80,6 +80,44 @@ class SessionTreeWidget(QTreeWidget):
         self.undo_stack.clear()
         self.redo_stack.clear()
 
+    def _snapshot(self):
+        from cc_history_tidy.tree_state import capture_tree_state
+
+        return capture_tree_state(self)
+
+    def _commit_undo(self, pre_state) -> None:
+        """Push a pre-change snapshot onto the undo stack (clears redo)."""
+        self.undo_stack.append(pre_state)
+        if len(self.undo_stack) > UNDO_LIMIT:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+
+    def _tree_fingerprint(self) -> tuple:
+        """A cheap structural fingerprint used to detect no-op operations:
+        (account_uuid, (group_code_id, (session_id|ghost-marker, ...)) ...)."""
+        from cc_history_tidy.models import ClaudeSession
+
+        out = []
+        for ai in range(self.topLevelItemCount()):
+            account = self.topLevelItem(ai)
+            groups = []
+            for gi in range(account.childCount()):
+                group = account.child(gi)
+                sessions = []
+                for si in range(group.childCount()):
+                    item = group.child(si)
+                    session = item.data(0, Qt.ItemDataRole.UserRole)
+                    sid = session.session_id if isinstance(session, ClaudeSession) else ""
+                    ghost = item.data(0, STAGED_MODE_ROLE) or ""
+                    sessions.append((sid, ghost))
+                groups.append(
+                    (str(group.data(0, Qt.ItemDataRole.UserRole) or ""),
+                     group.data(0, STAGED_MODE_ROLE) or "",
+                     tuple(sessions))
+                )
+            out.append((str(account.data(0, Qt.ItemDataRole.UserRole) or ""), tuple(groups)))
+        return tuple(out)
+
     def copy_selected_sessions(self) -> int:
         return self._stash_clipboard(MigrationMode.COPY)
 
@@ -153,7 +191,12 @@ class SessionTreeWidget(QTreeWidget):
         group_item, insert_index = placement
         mode = self.clipboard_mode
         items = [item for item in self.clipboard_items if self._item_alive(item)]
-        self.push_undo_snapshot()
+        # Snapshot before mutating; only commit to the undo stack if the tree
+        # actually changed. Committing unconditionally would clear the redo
+        # stack even for a no-op (cut then paste back into the origin group),
+        # silently destroying redo history.
+        pre_state = self._snapshot()
+        before = self._tree_fingerprint()
         pasted = 0
         for item in items:
             if mode == MigrationMode.MOVE:
@@ -172,11 +215,13 @@ class SessionTreeWidget(QTreeWidget):
             pasted += 1
         if mode == MigrationMode.MOVE:
             self.clear_clipboard()
-        if pasted == 0:
-            self.undo_stack.pop()
-        else:
-            self.refresh_staged_markers()
-            self.treeChanged.emit()
+        if pasted == 0 or self._tree_fingerprint() == before:
+            if pasted:
+                self.refresh_staged_markers()
+            return pasted
+        self._commit_undo(pre_state)
+        self.refresh_staged_markers()
+        self.treeChanged.emit()
         return pasted
 
     def _paste_groups_to(self, target_item: QTreeWidgetItem | None) -> int:
@@ -186,7 +231,8 @@ class SessionTreeWidget(QTreeWidget):
             return 0
         mode = self.clipboard_mode
         groups = [item for item in self.clipboard_items if self._item_alive(item)]
-        self.push_undo_snapshot()
+        pre_state = self._snapshot()
+        before = self._tree_fingerprint()
         pasted = 0
         for group_item in groups:
             if mode == MigrationMode.MOVE:
@@ -199,11 +245,13 @@ class SessionTreeWidget(QTreeWidget):
                 pasted += self._paste_ghost_group(group_item, account_item)
         if mode == MigrationMode.MOVE:
             self.clear_clipboard()
-        if pasted == 0:
-            self.undo_stack.pop()
-        else:
-            self.refresh_staged_markers()
-            self.treeChanged.emit()
+        if pasted == 0 or self._tree_fingerprint() == before:
+            if pasted:
+                self.refresh_staged_markers()
+            return pasted
+        self._commit_undo(pre_state)
+        self.refresh_staged_markers()
+        self.treeChanged.emit()
         return pasted
 
     def _account_for_target(self, target_item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
@@ -314,8 +362,9 @@ class SessionTreeWidget(QTreeWidget):
         parent = item.parent()
         if parent is None:
             return
-        self.push_undo_snapshot()
+        pre_state = self._snapshot()
         parent.takeChild(parent.indexOfChild(item))
+        self._commit_undo(pre_state)
         self.statusMessage.emit(tr("status.ghost_removed"))
         self.treeChanged.emit()
 
@@ -406,18 +455,20 @@ class SessionTreeWidget(QTreeWidget):
         moving_items = self._selected_movable_items()
         target_item = self._drop_target_item(event)
         if moving_items and target_item is not None:
-            self.push_undo_snapshot()
+            pre_state = self._snapshot()
+            before = self._tree_fingerprint()
             if self.move_items_to_target(
                 moving_items,
                 target_item,
                 self.dropIndicatorPosition(),
             ):
                 self.normalize_structure()
-                self.refresh_staged_markers()
-                self.treeChanged.emit()
+                if self._tree_fingerprint() != before:
+                    self._commit_undo(pre_state)
+                    self.refresh_staged_markers()
+                    self.treeChanged.emit()
                 event.acceptProposedAction()
                 return
-            self.undo_stack.pop()
         event.ignore()
 
     def move_items_to_target(self, moving_items: list[QTreeWidgetItem], target_item: QTreeWidgetItem, position) -> bool:

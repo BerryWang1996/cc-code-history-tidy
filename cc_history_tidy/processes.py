@@ -29,7 +29,11 @@ def is_claude_desktop_path(image_path: str) -> bool:
     normalized = image_path.replace("\\", "/").lower()
     if not normalized.endswith("/" + _DESKTOP_EXE) and not normalized.endswith(_DESKTOP_EXE):
         return False
-    return _CLI_MARKER not in normalized
+    # The CLI lives under a ``claude-code`` PATH SEGMENT (e.g. ``.../Claude-3p/
+    # claude-code/2.1.197/claude.exe``). A substring test would misclassify a
+    # Desktop copy kept at ``D:/claude-code-backup/Claude.exe`` as the CLI.
+    segments = normalized.split("/")
+    return _CLI_MARKER not in segments
 
 
 def claude_desktop_running_from_paths(image_paths: list[str]) -> bool:
@@ -66,7 +70,11 @@ def _iter_claude_process_paths() -> list[str]:
 
     snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if not snapshot or snapshot == INVALID_HANDLE:
-        return []
+        # Snapshot failed (e.g. transient ERROR_NOT_ENOUGH_MEMORY). Raising —
+        # rather than returning [] — lets is_claude_desktop_running catch it
+        # and fail safe (assume Desktop may be running). Returning [] would
+        # read as "no claude.exe" and wrongly enable Execute.
+        raise OSError("CreateToolhelp32Snapshot failed")
 
     pids: list[int] = []
     try:

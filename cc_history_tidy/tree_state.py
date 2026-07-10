@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from cc_history_tidy.models import ClaudeSession
 
 STAGED_MODE_ROLE = Qt.ItemDataRole.UserRole + 3
+SESSION_COUNT_ROLE = Qt.ItemDataRole.UserRole + 4
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class AccountState:
     default_group_id: str
     sessions_root: Path
     expanded: bool
+    session_count: int | None
     groups: tuple[GroupState, ...]
 
 
@@ -81,6 +83,7 @@ def capture_tree_state(tree) -> TreeState:
                 default_group_id=str(account_item.data(0, Qt.ItemDataRole.UserRole + 1) or ""),
                 sessions_root=account_item.data(0, Qt.ItemDataRole.UserRole + 2),
                 expanded=account_item.isExpanded(),
+                session_count=account_item.data(0, SESSION_COUNT_ROLE),
                 groups=tuple(groups),
             )
         )
@@ -106,6 +109,8 @@ def restore_tree_state(tree, state: TreeState) -> None:
             account_state.sessions_root,
         )
         tree.addTopLevelItem(account_item)
+        if account_state.session_count is not None:
+            account_item.setData(0, SESSION_COUNT_ROLE, account_state.session_count)
         for group_state in account_state.groups:
             group_item = _new_code_group_item(
                 group_state.label, group_state.code_group_id, group_state.group_id

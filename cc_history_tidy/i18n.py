@@ -82,6 +82,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "恢复备份",
         "dlg.restore_body": "恢复备份 {name}？\n\n这将替换以下目录的会话树：\n{path}",
         "dlg.restore_running_body": "请先关闭 Claude Desktop / Claude Code Desktop 再恢复备份。",
+        "dlg.localstorage_skipped_title": "部分分组的侧栏定义未写入",
+        "dlg.localstorage_skipped_body": "以下安装的 Claude Desktop 从未打开过界面，渲染层缓存不存在，分组定义无法写入（会话文件与配置已正常迁移，仅侧栏分组显示会缺失，打开一次该客户端即可）：\n{roots}",
+        "status.localstorage_skipped_suffix": "部分安装的侧栏分组定义未写入，详见弹窗。",
     },
     "zh_TW": {
         "app.title": "CC Code History Tidy",
@@ -148,6 +151,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "還原備份",
         "dlg.restore_body": "還原備份 {name}？\n\n這將取代以下目錄的會話樹：\n{path}",
         "dlg.restore_running_body": "請先關閉 Claude Desktop / Claude Code Desktop 再還原備份。",
+        "dlg.localstorage_skipped_title": "部分分組的側欄定義未寫入",
+        "dlg.localstorage_skipped_body": "以下安裝的 Claude Desktop 從未開啟過介面，渲染層快取不存在，分組定義無法寫入（會話檔案與設定已正常遷移，僅側欄分組顯示會缺失，開啟一次該用戶端即可）：\n{roots}",
+        "status.localstorage_skipped_suffix": "部分安裝的側欄分組定義未寫入，詳見彈窗。",
     },
     "en": {
         "app.title": "CC Code History Tidy",
@@ -214,6 +220,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "Restore backup",
         "dlg.restore_body": "Restore backup {name}?\n\nThis replaces the sessions tree at:\n{path}",
         "dlg.restore_running_body": "Close Claude Desktop / Claude Code Desktop before restoring a backup.",
+        "dlg.localstorage_skipped_title": "Sidebar group definitions not written for some installs",
+        "dlg.localstorage_skipped_body": "The Claude Desktop UI has never been opened in the install(s) below, so the renderer cache that holds group definitions does not exist. Session files and the config were migrated normally, but groups will be missing from the sidebar there until you open that Desktop once:\n{roots}",
+        "status.localstorage_skipped_suffix": "Sidebar group definitions were skipped for some installs — see the dialog.",
     },
     "ja": {
         "app.title": "CC Code History Tidy",
@@ -280,6 +289,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "バックアップの復元",
         "dlg.restore_body": "バックアップ {name} を復元しますか？\n\n以下のセッションツリーが置き換えられます：\n{path}",
         "dlg.restore_running_body": "バックアップを復元する前に Claude Desktop / Claude Code Desktop を終了してください。",
+        "dlg.localstorage_skipped_title": "一部インストールのサイドバーのグループ定義が書き込まれませんでした",
+        "dlg.localstorage_skipped_body": "以下のインストールで Claude Desktop の UI が一度も開かれていないため、グループ定義を保持するレンダラーキャッシュが存在しません。セッションファイルと設定は正常に移行されましたが、そこのサイドバーではグループが表示されません（該当デスクトップを一度開けば解決します）：\n{roots}",
+        "status.localstorage_skipped_suffix": "一部インストールのサイドバーのグループ定義の書き込みをスキップしました — ダイアログを参照。",
     },
     "ko": {
         "app.title": "CC Code History Tidy",
@@ -346,6 +358,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "백업 복원",
         "dlg.restore_body": "백업 {name} 을(를) 복원할까요?\n\n다음 위치의 세션 트리가 교체됩니다:\n{path}",
         "dlg.restore_running_body": "백업을 복원하기 전에 Claude Desktop / Claude Code Desktop 을 종료하세요.",
+        "dlg.localstorage_skipped_title": "일부 설치의 사이드바 그룹 정의가 기록되지 않았습니다",
+        "dlg.localstorage_skipped_body": "아래 설치에서 Claude Desktop UI 가 한 번도 열리지 않아 그룹 정의를 담는 렌더러 캐시가 없습니다. 세션 파일과 설정은 정상적으로 마이그레이션되었으나 해당 사이드바에는 그룹이 표시되지 않습니다 (해당 데스크톱을 한 번 열면 해결됨):\n{roots}",
+        "status.localstorage_skipped_suffix": "일부 설치의 사이드바 그룹 정의 기록을 건너뛰었습니다 — 대화 상자를 참조하세요.",
     },
     "es": {
         "app.title": "CC Code History Tidy",
@@ -412,6 +427,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "Restaurar copia",
         "dlg.restore_body": "¿Restaurar la copia {name}?\n\nEsto reemplaza el árbol de sesiones en:\n{path}",
         "dlg.restore_running_body": "Cierra Claude Desktop / Claude Code Desktop antes de restaurar una copia.",
+        "dlg.localstorage_skipped_title": "Definiciones de grupos no escritas en algunos perfiles",
+        "dlg.localstorage_skipped_body": "La UI de Claude Desktop nunca se ha abierto en las instalaciones siguientes, así que no existe la caché del renderizador que guarda las definiciones de grupos. Los archivos de sesión y la configuración se migraron con normalidad, pero los grupos faltarán en la barra lateral ahí hasta que abras ese Desktop una vez:\n{roots}",
+        "status.localstorage_skipped_suffix": "Se omitieron las definiciones de grupos en algunos perfiles — consulta el diálogo.",
     },
     "fr": {
         "app.title": "CC Code History Tidy",
@@ -478,6 +496,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "Restaurer la sauvegarde",
         "dlg.restore_body": "Restaurer la sauvegarde {name} ?\n\nCela remplace l'arborescence des sessions à :\n{path}",
         "dlg.restore_running_body": "Fermez Claude Desktop / Claude Code Desktop avant de restaurer une sauvegarde.",
+        "dlg.localstorage_skipped_title": "Définitions de groupes non écrites pour certains profils",
+        "dlg.localstorage_skipped_body": "L'interface Claude Desktop n'a jamais été ouverte dans le(s) profil(s) ci-dessous, donc le cache du moteur qui contient les définitions de groupes n'existe pas. Les fichiers de session et la config ont été migrés normalement, mais les groupes manqueront dans la barre latérale là-bas jusqu'à ce que vous ouvriez ce Desktop une fois :\n{roots}",
+        "status.localstorage_skipped_suffix": "Définitions de groupes ignorées pour certains profils — voir la boîte de dialogue.",
     },
     "de": {
         "app.title": "CC Code History Tidy",
@@ -544,6 +565,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "Backup wiederherstellen",
         "dlg.restore_body": "Backup {name} wiederherstellen?\n\nDies ersetzt den Sitzungsbaum unter:\n{path}",
         "dlg.restore_running_body": "Schließe Claude Desktop / Claude Code Desktop, bevor du ein Backup wiederherstellst.",
+        "dlg.localstorage_skipped_title": "Gruppendefinitionen für manche Installationen nicht geschrieben",
+        "dlg.localstorage_skipped_body": "Die Claude-Desktop-Oberfläche wurde in der/den untenstehenden Installation(en) nie geöffnet, daher fehlt der Renderer-Cache, der die Gruppendefinitionen hält. Sitzungsdateien und Konfiguration wurden normal migriert, aber Gruppen fehlen dort in der Seitenleiste, bis du dieses Desktop einmal öffnest:\n{roots}",
+        "status.localstorage_skipped_suffix": "Gruppendefinitionen für manche Installationen übersprungen — siehe Dialog.",
     },
     "ru": {
         "app.title": "CC Code History Tidy",
@@ -610,6 +634,9 @@ LANGS: dict[str, dict[str, str]] = {
         "dlg.restore_title": "Восстановление резервной копии",
         "dlg.restore_body": "Восстановить резервную копию {name}?\n\nЭто заменит дерево сессий по пути:\n{path}",
         "dlg.restore_running_body": "Закройте Claude Desktop / Claude Code Desktop перед восстановлением резервной копии.",
+        "dlg.localstorage_skipped_title": "Определения групп не записаны для некоторых установок",
+        "dlg.localstorage_skipped_body": "Интерфейс Claude Desktop ни разу не открывался в перечисленных ниже установках, поэтому кэша рендерера с определениями групп не существует. Файлы сеансов и конфиг мигрированы нормально, но группы будут отсутствовать на боковой панели там, пока вы не откроете этот Desktop один раз:\n{roots}",
+        "status.localstorage_skipped_suffix": "Определения групп пропущены для некоторых установок — см. диалог.",
     },
 }
 

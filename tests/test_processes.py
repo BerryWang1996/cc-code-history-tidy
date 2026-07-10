@@ -1,3 +1,4 @@
+from cc_history_tidy import processes
 from cc_history_tidy.processes import (
     claude_desktop_running_from_paths,
     is_claude_desktop_path,
@@ -8,6 +9,7 @@ MSIX_DESKTOP = r"C:\Program Files\WindowsApps\Claude_1.18286.0.0_x64__pzs8sxrjxf
 ELECTRON_DESKTOP = r"C:\Users\me\AppData\Local\Claude\app-0.1.2\Claude.exe"
 GATEWAY_CLI = r"C:\Users\me\AppData\Local\Claude-3p\claude-code\2.1.197\claude.exe"
 UNRELATED = r"C:\Windows\notepad.exe"
+DESKTOP_UNDER_CLAUDE_CODE_SUBSTR = r"D:\claude-code-backup\Claude.exe"
 
 
 def test_desktop_paths_are_recognized():
@@ -46,3 +48,22 @@ def test_running_false_when_no_claude():
 def test_injected_paths_bypass_enumeration():
     assert is_claude_desktop_running(image_paths=[MSIX_DESKTOP]) is True
     assert is_claude_desktop_running(image_paths=[GATEWAY_CLI]) is False
+
+
+def test_claude_code_as_substring_is_still_desktop():
+    # 'claude-code' only marks the CLI when it is a full PATH SEGMENT. A Desktop
+    # copy at D:\claude-code-backup\Claude.exe must still block Execute.
+    assert is_claude_desktop_path(DESKTOP_UNDER_CLAUDE_CODE_SUBSTR)
+
+
+def test_enumeration_failure_fails_safe_as_running(monkeypatch):
+    # A transient ToolHelp/snapshot failure must NOT read as "no Claude" — that
+    # would enable Execute while Desktop is open. is_claude_desktop_running
+    # catches the OSError and fails safe (assume running).
+    monkeypatch.setattr(processes.os, "name", "nt")
+
+    def boom():
+        raise OSError("CreateToolhelp32Snapshot failed")
+
+    monkeypatch.setattr(processes, "_iter_claude_process_paths", boom)
+    assert is_claude_desktop_running() is True

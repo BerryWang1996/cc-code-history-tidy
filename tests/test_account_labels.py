@@ -125,3 +125,31 @@ def test_gateway_server_url_detection(tmp_path):
     assert gateway_server_url(gw_root) == "https://gw.example.com"
     # a regular claude.ai root is not a gateway
     assert gateway_server_url(fixture.sessions_root.parent) is None
+
+
+def test_gateway_server_url_prefers_newest_creds(tmp_path):
+    import os
+    import time as _time
+    from cc_history_tidy.account_identity import gateway_server_url
+
+    root = tmp_path / "Claude-3p"
+    root.mkdir()
+    (root / "claude_desktop_config.json").write_text(
+        __import__("json").dumps({"deploymentMode": "3p"}), encoding="utf-8"
+    )
+    old = root / "host-creds-2024-01.json"
+    new = root / "host-creds-2024-06.json"
+    old.write_text(
+        __import__("json").dumps({"env": {"ANTHROPIC_BASE_URL": "https://old-gw"}}),
+        encoding="utf-8",
+    )
+    new.write_text(
+        __import__("json").dumps({"env": {"ANTHROPIC_BASE_URL": "https://new-gw"}}),
+        encoding="utf-8",
+    )
+    # make the lexicographically-earlier file the NEWER one to prove mtime wins
+    now = _time.time()
+    os.utime(new, (now - 100, now - 100))
+    os.utime(old, (now, now))
+
+    assert gateway_server_url(root) == "https://old-gw"

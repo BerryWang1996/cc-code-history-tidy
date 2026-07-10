@@ -115,3 +115,38 @@ def test_backup_and_restore_cover_local_storage(tmp_path):
     restore_backup(backup)
 
     assert _live_store_state(leveldb) == before
+
+
+def test_execute_warns_when_localstorage_write_skipped(tmp_path):
+    # No renderer store exists (Desktop UI never opened): the config is written
+    # but the LevelDB group definitions cannot be, and Execute must surface a
+    # warning instead of silently reporting plain success.
+    fixture = build_claude_fixture(tmp_path)
+    # deliberately DO NOT seed a dframe-store; create an empty leveldb dir
+    (fixture.sessions_root.parent / "Local Storage" / "leveldb").mkdir(parents=True)
+    env = discover_claude_environment(
+        fixture.user_profile, fixture.appdata, fixture.localappdata
+    )
+    create_app([])
+    seen = {}
+    window = MainWindow(
+        backup_parent=tmp_path / "backups",
+        process_checker=lambda: False,
+        execute_confirmer=lambda summary: True,
+        info_notifier=lambda title, body: seen.update(title=title, body=body),
+    )
+    window.load_environment(env)
+    tree = window.session_tree
+    source_group = _find_item_by_data(tree, fixture.source_code_group_id)
+    current_account = _find_item_by_data(tree, fixture.current_account_uuid)
+    tree.setCurrentItem(source_group)
+    tree.cut_selected_sessions()
+    tree.paste_to(current_account)
+
+    window.execute_plan()
+
+    # the warning notification fired and the status bar notes the skip
+    assert seen, "expected a skipped-localstorage warning"
+    from cc_history_tidy import i18n
+    assert i18n.tr("status.localstorage_skipped_suffix") in window.status_label.text()
+

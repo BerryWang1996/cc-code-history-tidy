@@ -60,7 +60,15 @@ def gateway_server_url(claude_root: Path) -> str | None:
         return None
     if not isinstance(config, dict) or config.get("deploymentMode") != "3p":
         return None
-    for creds_path in sorted(claude_root.glob("host-creds-*.json")):
+    # Prefer the most recently modified creds file: a reconfigured gateway
+    # leaves the old host-creds-*.json behind, and lexicographic order would
+    # pick the stale one.
+    creds_files = sorted(
+        claude_root.glob("host-creds-*.json"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+        reverse=True,
+    )
+    for creds_path in creds_files:
         try:
             data = json.loads(creds_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
